@@ -1,0 +1,22 @@
+# Folders (exact names at repo root)
+debug_frames/
+scoring_result/
+
+# Python caches (anywhere)
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# (Optional) ignore an entire folder anywhere in the repo
+# **/debug_frames/
+# **/scoring_result/
+
+# Ignore all images
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# ✅ Exceptions with paths
+!opt_v3/football_pitch_template.png
+!football_pitch_template.png
