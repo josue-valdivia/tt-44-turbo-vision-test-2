@@ -1,0 +1,11 @@
+{
+  "video_id": "26",
+  "keypoint_scores": [
+    {
+      "frame": 2,
+      "score": 0.8001133215809618
+    }
+  ],
+  "avg_keypoints_score": 0.8001133215809618,
+  "keypoints_errors": {}
+}
