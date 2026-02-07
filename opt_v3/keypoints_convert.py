@@ -2119,6 +2119,45 @@ def extract_masks_for_ground_and_lines(image: np.ndarray, debug_frame_id: int | 
     return mask_ground_binary, mask_lines_binary
 
 
+@functools.lru_cache(maxsize=1)
+def _get_template_ground_and_line_masks() -> tuple[np.ndarray, np.ndarray]:
+    """Precompute ground and line binary masks in template space (same logic as extract_masks_for_ground_and_lines).
+    Used by non-polygon scoring to warp masks directly instead of warping RGB and thresholding."""
+    template = challenge_template()
+    if template is None or template.size == 0:
+        h, w = 720, 1280
+        return np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8)
+    gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    _, mask_ground = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+    _, mask_lines = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    mask_ground_bin = (mask_ground > 0).astype(np.uint8)
+    mask_lines_bin = (mask_lines > 0).astype(np.uint8)
+    return mask_ground_bin, mask_lines_bin
+
+
+def _homography_from_keypoints(
+    source_keypoints: list[tuple[int, int]],
+    destination_keypoints: list[tuple[float, float]],
+) -> np.ndarray:
+    """Compute homography from keypoint correspondences and validate (no image warp)."""
+    filtered_src: list[tuple[int, int]] = []
+    filtered_dst: list[tuple[float, float]] = []
+    for src_pt, dst_pt in zip(source_keypoints, destination_keypoints, strict=True):
+        if dst_pt[0] == 0.0 and dst_pt[1] == 0.0:
+            continue
+        filtered_src.append(src_pt)
+        filtered_dst.append(dst_pt)
+    if len(filtered_src) < 4:
+        raise ValueError("At least 4 valid keypoints are required for homography.")
+    source_points = np.array(filtered_src, dtype=np.float32)
+    destination_points = np.array(filtered_dst, dtype=np.float32)
+    H, _ = cv2.findHomography(source_points, destination_points)
+    if H is None:
+        raise ValueError("Homography computation failed")
+    validate_projected_corners(source_keypoints=source_keypoints, homography_matrix=H)
+    return H
+
+
 def _polygon_masks_from_homography(
     homography_matrix: np.ndarray,
     frame_shape: tuple[int, int],
@@ -2537,13 +2576,22 @@ def evaluate_keypoints_for_frame(
                             return_h=True,
                         )
                     else:
-                        warped_template = project_image_using_keypoints(
-                            image=floor_markings_template,
-                            source_keypoints=template_keypoints,
-                            destination_keypoints=frame_keypoints,
-                            destination_width=frame_width,
-                            destination_height=frame_height,
-                        )
+                        # Non-polygon: get H only (or H + warped_template when DEBUG). Masks from warp of precomputed template masks.
+                        if DEBUG_FLAG:
+                            warped_template, homography_matrix = project_image_using_keypoints(
+                                image=floor_markings_template,
+                                source_keypoints=template_keypoints,
+                                destination_keypoints=frame_keypoints,
+                                destination_width=frame_width,
+                                destination_height=frame_height,
+                                return_h=True,
+                            )
+                        else:
+                            homography_matrix = _homography_from_keypoints(
+                                template_keypoints,
+                                frame_keypoints,
+                            )
+                            warped_template = None
             except ValueError as e:
                 # ValueError: < 4 valid keypoints or homography computation failed
                 if DEBUG_FLAG and log_context is None:
@@ -2578,9 +2626,24 @@ def evaluate_keypoints_for_frame(
                         debug_frame_id=frame_number,
                     )
                 else:
-                    mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(
-                        image=warped_template, debug_frame_id=frame_number
+                    # Non-polygon: warp precomputed template masks (no per-pixel threshold on warped image).
+                    tpl_ground, tpl_lines = _get_template_ground_and_line_masks()
+                    mask_ground_bin = cv2.warpPerspective(
+                        tpl_ground,
+                        homography_matrix,
+                        (frame_width, frame_height),
+                        flags=cv2.INTER_NEAREST,
                     )
+                    mask_ground_bin = (mask_ground_bin > 0).astype(np.uint8)
+                    mask_lines_expected = cv2.warpPerspective(
+                        tpl_lines,
+                        homography_matrix,
+                        (frame_width, frame_height),
+                        flags=cv2.INTER_NEAREST,
+                    )
+                    mask_lines_expected = (mask_lines_expected > 0).astype(np.uint8)
+                    validate_mask_ground(mask=mask_ground_bin)
+                    validate_mask_lines(mask=mask_lines_expected, debug_frame_id=frame_number)
             except InvalidMask as e:
                 if DEBUG_FLAG and log_context is None:
                     print(f"[DEBUG] {frame_id_str} - Step 4: Mask validation failed: {e}")
