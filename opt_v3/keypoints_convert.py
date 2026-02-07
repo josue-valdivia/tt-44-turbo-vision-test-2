@@ -798,23 +798,6 @@ def _step4_1_compute_border_line(
     try:
         H_img, W_img = frame.shape[:2]
 
-        t_ = time.perf_counter()
-        if cached_edges is not None:
-            edges = cached_edges
-        else:
-            edges = compute_frame_canny_edges(frame)
-        try:
-            dil_k = _kernel_rect_3()
-        except Exception:
-            dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
-
-        edge_only = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-        edge_only[edges > 0] = (255, 255, 255)
-        edge_only_dilated = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-        edge_only_dilated[edges_dilated > 0] = (255, 255, 255)
-        result["profile"]["edges_dilate_ms"] = (time.perf_counter() - t_) * 1000.0
-
         # H from input keypoints (template -> ordered_kps)
         filtered_src: list[tuple[float, float]] = []
         filtered_dst: list[tuple[float, float]] = []
@@ -876,11 +859,6 @@ def _step4_1_compute_border_line(
         result["Ey"] = float(Ey)
         result["Fy"] = float(Fy)
 
-        # Draw infinite red line (segment from (0,Ey) to (W-1,Fy))
-        pt_E_red = (0, int(round(Ey)))
-        pt_F_red = (W_img - 1, int(round(Fy)))
-        cv2.line(edge_only, pt_E_red, pt_F_red, (0, 0, 255), 1)
-        cv2.line(edge_only_dilated, pt_E_red, pt_F_red, (0, 0, 255), 1)
         result["profile"]["homography_red_ms"] = (time.perf_counter() - t_) * 1000.0
 
         # Calculate green line only when any part of the red line is in the image range (y in [0, H-1])
@@ -894,8 +872,46 @@ def _step4_1_compute_border_line(
                 out_dir = Path("debug_frames") / "step4_1"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 out_step41_dil = out_dir / f"frame_{int(frame_number):05d}_step4_1_edge_dilated_line_5_29.png"
+                t_ = time.perf_counter()
+                if cached_edges is not None:
+                    edges = cached_edges
+                else:
+                    edges = compute_frame_canny_edges(frame)
+                try:
+                    dil_k = _kernel_rect_3()
+                except Exception:
+                    dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
+                edge_only_dilated = np.zeros((H_img, W_img, 3), dtype=np.uint8)
+                edge_only_dilated[edges_dilated > 0] = (255, 255, 255)
+                result["profile"]["edges_dilate_ms"] = (time.perf_counter() - t_) * 1000.0
                 cv2.imwrite(str(out_step41_dil), edge_only_dilated)
             return result
+
+        t_ = time.perf_counter()
+        if cached_edges is not None:
+            edges = cached_edges
+        else:
+            edges = compute_frame_canny_edges(frame)
+        try:
+            dil_k = _kernel_rect_3()
+        except Exception:
+            dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
+
+        edge_only = None
+        edge_only_dilated = None
+        if DEBUG_FLAG:
+            edge_only = np.zeros((H_img, W_img, 3), dtype=np.uint8)
+            edge_only[edges > 0] = (255, 255, 255)
+            edge_only_dilated = np.zeros((H_img, W_img, 3), dtype=np.uint8)
+            edge_only_dilated[edges_dilated > 0] = (255, 255, 255)
+            # Draw infinite red line (segment from (0,Ey) to (W-1,Fy)) for debug only
+            pt_E_red = (0, int(round(Ey)))
+            pt_F_red = (W_img - 1, int(round(Fy)))
+            cv2.line(edge_only, pt_E_red, pt_F_red, (0, 0, 255), 1)
+            cv2.line(edge_only_dilated, pt_E_red, pt_F_red, (0, 0, 255), 1)
+        result["profile"]["edges_dilate_ms"] = (time.perf_counter() - t_) * 1000.0
 
         # 10px width white rate for border line (0, y_left) -> (W-1, y_right)
         t_green = time.perf_counter()
@@ -1016,8 +1032,9 @@ def _step4_1_compute_border_line(
             pA = (0, best_aay)
             pB = (W_img - 1, best_bby)
             green_thickness = 3  # thick enough to see on dilated image
-            cv2.line(edge_only, pA, pB, (0, 255, 0), green_thickness)
-            cv2.line(edge_only_dilated, pA, pB, (0, 255, 0), green_thickness)
+            if DEBUG_FLAG and edge_only is not None and edge_only_dilated is not None:
+                cv2.line(edge_only, pA, pB, (0, 255, 0), green_thickness)
+                cv2.line(edge_only_dilated, pA, pB, (0, 255, 0), green_thickness)
             result["best_aay"] = best_aay
             result["best_bby"] = best_bby
             result["best_white_rate"] = best_rate
@@ -1089,7 +1106,8 @@ def _step4_1_compute_border_line(
             out_dir = Path("debug_frames") / "step4_1"
             out_dir.mkdir(parents=True, exist_ok=True)
             out_step41_dil = out_dir / f"frame_{int(frame_number):05d}_step4_1_edge_dilated_line_5_29.png"
-            cv2.imwrite(str(out_step41_dil), edge_only_dilated)
+            if edge_only_dilated is not None:
+                cv2.imwrite(str(out_step41_dil), edge_only_dilated)
     except Exception as exc:  # pragma: no cover
         logger.error("Failed Step 4.1 border line compute for frame %s: %s", frame_number, exc)
         result["error"] = str(exc)
@@ -1487,8 +1505,10 @@ def _step4_3_debug_dilate_and_lines(
         except Exception:
             dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
-        edge_dilated_bgr = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-        edge_dilated_bgr[edges_dilated > 0] = (255, 255, 255)
+        edge_dilated_bgr = None
+        if DEBUG_FLAG:
+            edge_dilated_bgr = np.zeros((H_img, W_img, 3), dtype=np.uint8)
+            edge_dilated_bgr[edges_dilated > 0] = (255, 255, 255)
         result["profile"]["edges_dilate_ms"] = (time.perf_counter() - t_) * 1000.0
 
         t_ = time.perf_counter()
@@ -1556,24 +1576,25 @@ def _step4_3_debug_dilate_and_lines(
         x_bottom, y_bottom = pt_bottom[0], pt_bottom[1]
         x_C, y_C = pt_C[0], pt_C[1]
 
-        # Draw red segments (A-bottom, C-bottom, top-A, top-C)
+        # Draw red segments (A-bottom, C-bottom, top-A, top-C) for debug only
         pt_top = _red_line_pos(idx_top)
-        if pt_bottom and pt_A:
-            cv2.line(edge_dilated_bgr, pt_A, pt_bottom, (0, 0, 255), 1)
-        if pt_bottom and pt_C:
-            cv2.line(edge_dilated_bgr, pt_C, pt_bottom, (0, 0, 255), 1)
-        if use_right and len(ordered_kps) > 25:
-            pt_25 = _red_line_pos(25)
-            if pt_top and pt_25:
-                cv2.line(edge_dilated_bgr, pt_top, pt_25, (0, 0, 255), 1)
-            if pt_25 and pt_A:
-                cv2.line(edge_dilated_bgr, pt_25, pt_A, (0, 0, 255), 1)
+        if DEBUG_FLAG and edge_dilated_bgr is not None:
+            if pt_bottom and pt_A:
+                cv2.line(edge_dilated_bgr, pt_A, pt_bottom, (0, 0, 255), 1)
+            if pt_bottom and pt_C:
+                cv2.line(edge_dilated_bgr, pt_C, pt_bottom, (0, 0, 255), 1)
+            if use_right and len(ordered_kps) > 25:
+                pt_25 = _red_line_pos(25)
+                if pt_top and pt_25:
+                    cv2.line(edge_dilated_bgr, pt_top, pt_25, (0, 0, 255), 1)
+                if pt_25 and pt_A:
+                    cv2.line(edge_dilated_bgr, pt_25, pt_A, (0, 0, 255), 1)
+                elif pt_top and pt_A:
+                    cv2.line(edge_dilated_bgr, pt_top, pt_A, (0, 0, 255), 1)
             elif pt_top and pt_A:
                 cv2.line(edge_dilated_bgr, pt_top, pt_A, (0, 0, 255), 1)
-        elif pt_top and pt_A:
-            cv2.line(edge_dilated_bgr, pt_top, pt_A, (0, 0, 255), 1)
-        if pt_top and pt_C:
-            cv2.line(edge_dilated_bgr, pt_top, pt_C, (0, 0, 255), 1)
+            if pt_top and pt_C:
+                cv2.line(edge_dilated_bgr, pt_top, pt_C, (0, 0, 255), 1)
         result["profile"]["homography_red_ms"] = (time.perf_counter() - t_) * 1000.0
 
         t_ = time.perf_counter()
@@ -1584,8 +1605,26 @@ def _step4_3_debug_dilate_and_lines(
         REFINE_RADIUS = 2   # refine in ±this window around best coarse – smaller = faster
         LINE_SAMPLE_MAX = 128  # cap steps along segment for speed (vectorized path)
 
+        edges_dilated_flat = edges_dilated.ravel() if _sloping_line_white_count_cy is not None else None
+
         def _line_segment_white_rate(ax: int, ay: int, bx: int, by: int, half_width: int = 5) -> float:
             """White pixel rate in (2*half_width+1)-px-wide band: white_count / total_pixels. Returns 0.0 if no pixels."""
+            if _sloping_line_white_count_cy is not None and edges_dilated_flat is not None:
+                try:
+                    white, total = _sloping_line_white_count_cy(
+                        edges_dilated_flat,
+                        W_img,
+                        H_img,
+                        float(ax),
+                        float(ay),
+                        float(bx),
+                        float(by),
+                        half_width,
+                        LINE_SAMPLE_MAX,
+                    )
+                    return white / total if total > 0 else 0.0
+                except Exception:
+                    pass
             L = float(np.hypot(float(bx - ax), float(by - ay)))
             if L < 1.0:
                 return 0.0
@@ -1661,7 +1700,7 @@ def _step4_3_debug_dilate_and_lines(
         result["profile"]["AB_refine_candidates"] = (a_ref_max - a_ref_min + 1) * (b_ref_max - b_ref_min + 1)
         result["profile"]["AB_best_white_rate"] = best_rate
 
-        if best_rate >= 0.0:
+        if best_rate >= 0.0 and DEBUG_FLAG and edge_dilated_bgr is not None:
             cv2.line(edge_dilated_bgr, best_a, best_b, (0, 255, 0), 2)
 
         t_ = time.perf_counter()
@@ -1706,7 +1745,7 @@ def _step4_3_debug_dilate_and_lines(
         result["profile"]["CD_coarse_candidates"] = cd_coarse_candidates
         result["profile"]["CD_refine_candidates"] = cd_refine_candidates
         result["profile"]["CD_best_white_rate"] = best_cd_rate
-        if best_cd_rate >= 0.0:
+        if best_cd_rate >= 0.0 and DEBUG_FLAG and edge_dilated_bgr is not None:
             cv2.line(edge_dilated_bgr, best_c, best_d, (0, 255, 0), 2)
 
         def _line_line_intersection(
@@ -1737,7 +1776,8 @@ def _step4_3_debug_dilate_and_lines(
             x_F, y_F = float(p_F[0]), float(p_F[1])
             pt_E = (int(round(x_E)), int(round(y_E)))
             pt_F = (int(round(x_F)), int(round(y_F)))
-            cv2.line(edge_dilated_bgr, pt_E, pt_F, (0, 0, 255), 2)  # different red line (thickness 2) for E–F
+            if DEBUG_FLAG and edge_dilated_bgr is not None:
+                cv2.line(edge_dilated_bgr, pt_E, pt_F, (0, 0, 255), 2)  # different red line (thickness 2) for E–F
 
             t_ = time.perf_counter()
             x_E_int, y_E_int = int(round(x_E)), int(round(y_E))
@@ -1778,7 +1818,7 @@ def _step4_3_debug_dilate_and_lines(
             best_ef_b = (x_F_int, best_ef_b_y)
             result["profile"]["EF_search_ms"] = (time.perf_counter() - t_) * 1000.0
             result["profile"]["EF_best_white_rate"] = best_ef_rate
-            if best_ef_rate >= 0.0:
+            if best_ef_rate >= 0.0 and DEBUG_FLAG and edge_dilated_bgr is not None:
                 cv2.line(edge_dilated_bgr, best_ef_a, best_ef_b, (0, 255, 0), 2)
             ef_ax, ef_ay = float(best_ef_a[0]), float(best_ef_a[1])
             ef_bx, ef_by = float(best_ef_b[0]), float(best_ef_b[1])
@@ -1815,7 +1855,8 @@ def _step4_3_debug_dilate_and_lines(
             out_dir = Path("debug_frames") / "step4_3"
             out_dir.mkdir(parents=True, exist_ok=True)
             out_step43 = out_dir / f"frame_{int(frame_number):05d}_step4_3_dilate_lines_{side_label}.png"
-            cv2.imwrite(str(out_step43), edge_dilated_bgr)
+            if edge_dilated_bgr is not None:
+                cv2.imwrite(str(out_step43), edge_dilated_bgr)
     except Exception as e:
         logger.error("Step 4.3 failed for frame %s: %s", frame_number, e)
         result["error"] = str(e)
@@ -3833,6 +3874,24 @@ def _step3_build_ordered_candidates(
 
         return True
 
+    # Pick a single patterns source for this frame.
+    if allowed_set is not None and decision in ("left", "right"):
+        if decision == "left" and template_patterns_allowed_left is not None:
+            patterns_src = template_patterns_allowed_left
+            patterns_src_key = "left"
+        elif decision == "right" and template_patterns_allowed_right is not None:
+            patterns_src = template_patterns_allowed_right
+            patterns_src_key = "right"
+        else:
+            patterns_src = template_patterns
+            patterns_src_key = "all"
+    else:
+        patterns_src = template_patterns
+        patterns_src_key = "all"
+
+    # Cache expanded pattern keys per quad-pattern to avoid re-expansion/sorting.
+    expanded_patterns_cache: dict[tuple[bool, ...], tuple[tuple[bool, ...], ...]] = {}
+
     # --- optional sub-profiling for Step 3 (enabled when TV_KP_PROFILE=True) ---
     do_prof = _kp_prof_enabled()
     t_pat = t_dedupe = t_allowed = t_label = t_connlabel = t_conn = t_y = 0.0
@@ -3845,37 +3904,34 @@ def _step3_build_ordered_candidates(
     n_label_cy = n_connlabel_cy = n_conn_cy = 0
 
     mapped: list[dict[str, Any]] = []
+    def _cand_arr_from_candidates(cands: list[tuple[int, ...]] | list[list[int]]) -> np.ndarray:
+        arr = np.asarray(cands, dtype=np.int32)
+        if arr.ndim != 2 or arr.shape[1] < 4:
+            arr = np.asarray([c[:4] for c in cands], dtype=np.int32)
+        elif arr.shape[1] > 4:
+            arr = arr[:, :4]
+        return arr
+
     for quad in frame_four_points:
         n_quads += 1
         pattern = _pattern_for_quad(quad, frame_edge_set)
         if do_prof:
             t0 = time.perf_counter()
-        pattern_set = _expanded_patterns(pattern)
+        pattern_key = expanded_patterns_cache.get(pattern)
+        if pattern_key is None:
+            pattern_set = _expanded_patterns(pattern)
+            pattern_key = tuple(sorted(pattern_set))
+            expanded_patterns_cache[pattern] = pattern_key
         if do_prof:
             t_pat_expand += (time.perf_counter() - t0) * 1000.0
 
         if do_prof:
             t0 = time.perf_counter()
-        # PERF: use precomputed left/right-filtered template candidate lists when possible.
-        if allowed_set is not None and decision in ("left", "right"):
-            if decision == "left" and template_patterns_allowed_left is not None:
-                patterns_src = template_patterns_allowed_left
-                patterns_src_key = "left"
-            elif decision == "right" and template_patterns_allowed_right is not None:
-                patterns_src = template_patterns_allowed_right
-                patterns_src_key = "right"
-            else:
-                patterns_src = template_patterns
-                patterns_src_key = "all"
-        else:
-            patterns_src = template_patterns
-            patterns_src_key = "all"
-
         candidates_all: list[tuple[int, ...]] | None = None
         candidates: list[tuple[int, ...]] = []
         cand_arr_cached: np.ndarray | None = None
+        cand_arr: np.ndarray | None = None
         cand_all_len = cand_unique_len = 0
-        pattern_key = tuple(sorted(pattern_set))
         cached = False
         try:
             candidates, cand_arr_cached, cand_all_len, cand_unique_len = _get_step3_candidates_cached(
@@ -3901,7 +3957,7 @@ def _step3_build_ordered_candidates(
             t0 = time.perf_counter()
         # If we hit the cache, candidates are already unique.
         if not cached and candidates_all is not None:
-            if len(pattern_set) == 1:
+            if len(pattern_key) == 1:
                 candidates = list(candidates_all)
             else:
                 seen_cand: set[tuple[int, ...]] = set()
@@ -3934,24 +3990,18 @@ def _step3_build_ordered_candidates(
                 # Already filtered by allowed in patterns_src
                 n_after_allowed += len(candidates)
 
-        # Normalize candidate containers to lists to avoid Cython type errors
-        # (compiled builds can enforce list types in helpers like _labels_match).
-        if candidates and isinstance(candidates[0], tuple):
-            candidates = [list(c) for c in candidates]
+        if cached and cand_arr_cached is not None:
+            # Safe to reuse cached array only when no additional filtering was applied.
+            if patterns_src_key != "all" or allowed_set is None:
+                cand_arr = cand_arr_cached
 
         if template_labels:
             if do_prof:
                 t0 = time.perf_counter()
             if _step3_filter_labels_cy is not None and candidates:
                 quad_arr = np.asarray(quad[:4], dtype=np.int32)
-                if cand_arr_cached is not None and cached and patterns_src_key != "all":
-                    cand_arr = cand_arr_cached
-                else:
-                    cand_arr = np.asarray(candidates, dtype=np.int32)
-                    if cand_arr.ndim != 2 or cand_arr.shape[1] < 4:
-                        cand_arr = np.asarray([c[:4] for c in candidates], dtype=np.int32)
-                    elif cand_arr.shape[1] > 4:
-                        cand_arr = cand_arr[:, :4]
+                if cand_arr is None:
+                    cand_arr = _cand_arr_from_candidates(candidates)
                 if do_prof:
                     t1 = time.perf_counter()
                 keep_idx = _step3_filter_labels_cy(
@@ -3965,8 +4015,11 @@ def _step3_build_ordered_candidates(
                     t_label_cy += (time.perf_counter() - t1) * 1000.0
                     n_label_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
+                if cand_arr is not None:
+                    cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _labels_match(cand, quad)]
+                cand_arr = None
             if do_prof:
                 t_label += (time.perf_counter() - t0) * 1000.0
                 n_after_label += len(candidates)
@@ -3988,11 +4041,8 @@ def _step3_build_ordered_candidates(
                     use_cy_connlabel = max(quad4) < len(frame_adj_mask)
             if use_cy_connlabel:
                 quad_arr = np.asarray(quad4, dtype=np.int32)
-                cand_arr = np.asarray(candidates, dtype=np.int32)
-                if cand_arr.ndim != 2 or cand_arr.shape[1] < 4:
-                    cand_arr = np.asarray([c[:4] for c in candidates], dtype=np.int32)
-                elif cand_arr.shape[1] > 4:
-                    cand_arr = cand_arr[:, :4]
+                if cand_arr is None:
+                    cand_arr = _cand_arr_from_candidates(candidates)
                 decision_flag = -1
                 if decision == "left":
                     decision_flag = 0
@@ -4015,8 +4065,11 @@ def _step3_build_ordered_candidates(
                     t_connlabel_cy += (time.perf_counter() - t1) * 1000.0
                     n_connlabel_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
+                if cand_arr is not None:
+                    cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _check_connection_label_constraints(cand, quad)]
+                cand_arr = None
             if do_prof:
                 t_connlabel += (time.perf_counter() - t0) * 1000.0
                 n_after_connlabel += len(candidates)
@@ -4041,11 +4094,8 @@ def _step3_build_ordered_candidates(
                     use_cy_conn = max(quad4) < len(frame_reach3)
             if use_cy_conn:
                 quad_arr = np.asarray(quad[:4], dtype=np.int32)
-                cand_arr = np.asarray(candidates, dtype=np.int32)
-                if cand_arr.ndim != 2 or cand_arr.shape[1] < 4:
-                    cand_arr = np.asarray([c[:4] for c in candidates], dtype=np.int32)
-                elif cand_arr.shape[1] > 4:
-                    cand_arr = cand_arr[:, :4]
+                if cand_arr is None:
+                    cand_arr = _cand_arr_from_candidates(candidates)
                 if do_prof:
                     t1 = time.perf_counter()
                 keep_idx = _step3_conn_constraints_cy(
@@ -4060,8 +4110,11 @@ def _step3_build_ordered_candidates(
                     t_conn_cy += (time.perf_counter() - t1) * 1000.0
                     n_conn_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
+                if cand_arr is not None:
+                    cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _check_connection_constraints(cand, quad)]
+                cand_arr = None
             if do_prof:
                 t_conn += (time.perf_counter() - t0) * 1000.0
                 n_after_conn += len(candidates)
@@ -4078,18 +4131,12 @@ def _step3_build_ordered_candidates(
 
             if do_prof:
                 t0 = time.perf_counter()
-            # NOTE:
-            # `candidates` are stored as tuples for caching/deduping in the pure-Python version.
-            # When compiled with Cython (turbovision_miner_lib wheel), some internal helpers may
-            # enforce `list` argument types at runtime, which will raise if we pass a tuple.
-            #
-            # Normalize candidates here (only in this hot path) to keep behavior consistent
-            # between pure-Python and compiled builds.
-            filtered: list = []
+            # Normalize candidates to lists only when the Python y-order check runs.
+            filtered: list[list[int]] = []
             for cand in candidates:
-                cand_list = list(cand) if isinstance(cand, tuple) else cand
-                if _validate_y_ordering_partial(cand_list, quad, frame_keypoints):
-                    filtered.append(cand_list)
+                cand_seq = list(cand) if isinstance(cand, tuple) else cand
+                if _validate_y_ordering_partial(cand_seq, quad, frame_keypoints):
+                    filtered.append(cand_seq)
             candidates = filtered
             if do_prof:
                 t_y += (time.perf_counter() - t0) * 1000.0
