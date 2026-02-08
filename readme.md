@@ -1,0 +1,2 @@
+python ./opt_v3/keypoints_convert.py --video-url ./videos/new/28.mp4 --unsorted-json ./miner_responses_no_ordered/28.json
+python keypoints_calculate_score.py --video-url ./videos/new/28.mp4 --miner-json ./miner_responses_ordered_optimised/28.json --verbose
