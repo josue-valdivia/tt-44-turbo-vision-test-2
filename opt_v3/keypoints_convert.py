@@ -94,6 +94,8 @@ _cy_module, _CY_LOAD_ERROR = _manual_import_cy(_CY_MODULE_NAME, _CY_BASE_DIR)
 #   101.3 = .so found but exec_module failed
 #   101.4 = .pyx fallback also failed
 _CY_MODULE_LOADED = _cy_module is not None
+# One-time log for adding_four_points candidate search (Cython vs Python)
+_adding_four_points_cy_candidate_logged = False
 
 if _cy_module is not None:
     _seg_candidates_col_cy = getattr(_cy_module, "segments_from_col_band", None)
@@ -113,9 +115,11 @@ else:
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = True
-TV_KP_PROFILE: bool = False
+DEBUG_FLAG = False
+TV_KP_PROFILE: bool = True
 ONLY_FRAMES = list(range(2, 3))
+# Process frames at reduced resolution for speed (segment counts and mask work scale with area)
+PROCESSING_SCALE = 0.5  # 1.0 = full size; 0.5 = half width/height
 STEP5_ENABLED = True           # score the ordered keypoints
 STEP6_ENABLED = True           # fill missing keypoints using homography from Step 5
 STEP4_3_ENABLED = True         # refine keypoints with AB/CD lines and H-projected (dilate + green lines)
@@ -2225,6 +2229,7 @@ def evaluate_keypoints_for_frame(
     mask_debug_dir: Path | None = None,
     score_only: bool = False,
     log_context: dict | None = None,
+    processing_scale: float = 1.0,
 ) -> float:
     try:
         warped_template = None
@@ -2503,12 +2508,15 @@ def evaluate_keypoints_for_frame(
                 t_val_blacklist += time.perf_counter() - t_step
 
         # LRU cache for identical keypoints across frames.
-        cache_key = (
+        # Use 4-tuple for polygon path (unchanged); add processing_scale only for non-polygon so polygon scoring is not affected.
+        cache_key: tuple = (
             int(frame_number) if frame_number is not None else -1,
             int(frame_width),
             int(frame_height),
             tuple((float(x), float(y)) for x, y in frame_keypoints),
         )
+        if mask_polygons is None:
+            cache_key = cache_key + (round(processing_scale, 6),)
         if use_cache and cache_key in _KP_SCORE_CACHE:
             cached_score = float(_KP_SCORE_CACHE[cache_key])
             _KP_SCORE_CACHE.move_to_end(cache_key)
@@ -2577,14 +2585,31 @@ def evaluate_keypoints_for_frame(
                         )
                     else:
                         # Non-polygon: match keypoints_calculate_score — warp template image then extract masks from warped image.
-                        warped_template, homography_matrix = project_image_using_keypoints(
-                            image=floor_markings_template,
-                            source_keypoints=template_keypoints,
-                            destination_keypoints=frame_keypoints,
-                            destination_width=frame_width,
-                            destination_height=frame_height,
-                            return_h=True,
-                        )
+                        # Optionally at reduced resolution (processing_scale < 1) for speed; masks are upscaled to full size later.
+                        if 0 < processing_scale < 1.0:
+                            scaled_w = max(1, int(frame_width * processing_scale))
+                            scaled_h = max(1, int(frame_height * processing_scale))
+                            frame_kp_scaled = [
+                                (float(x) * processing_scale, float(y) * processing_scale)
+                                for x, y in frame_keypoints
+                            ]
+                            warped_template, homography_matrix = project_image_using_keypoints(
+                                image=floor_markings_template,
+                                source_keypoints=template_keypoints,
+                                destination_keypoints=frame_kp_scaled,
+                                destination_width=scaled_w,
+                                destination_height=scaled_h,
+                                return_h=True,
+                            )
+                        else:
+                            warped_template, homography_matrix = project_image_using_keypoints(
+                                image=floor_markings_template,
+                                source_keypoints=template_keypoints,
+                                destination_keypoints=frame_keypoints,
+                                destination_width=frame_width,
+                                destination_height=frame_height,
+                                return_h=True,
+                            )
             except ValueError as e:
                 # ValueError: < 4 valid keypoints or homography computation failed
                 if DEBUG_FLAG and log_context is None:
@@ -2626,6 +2651,20 @@ def evaluate_keypoints_for_frame(
                         warped_template,
                         debug_frame_id=frame_number,
                     )
+                    # If computed at reduced resolution, upsample masks to full frame size (1/processing_scale).
+                    if 0 < processing_scale < 1.0:
+                        mask_ground_bin = cv2.resize(
+                            mask_ground_bin,
+                            (frame_width, frame_height),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
+                        mask_ground_bin = (mask_ground_bin > 0).astype(np.uint8)
+                        mask_lines_expected = cv2.resize(
+                            mask_lines_expected,
+                            (frame_width, frame_height),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
+                        mask_lines_expected = (mask_lines_expected > 0).astype(np.uint8)
             except InvalidMask as e:
                 if DEBUG_FLAG and log_context is None:
                     print(f"[DEBUG] {frame_id_str} - Step 4: Mask validation failed: {e}")
@@ -7252,6 +7291,14 @@ def adding_four_points(
     v_10_80: dict[str, float] | None = None
     if DEBUG_FLAG:
         print(f"[DEBUG] Frame {frame_id} - adding_four_points: Searching for 10px sloping lines in overall areas")
+    # One-time log: Cython vs Python for horizontal/vertical candidate search
+    global _adding_four_points_cy_candidate_logged
+    if not _adding_four_points_cy_candidate_logged:
+        if _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
+            print("[tv][adding_four_points] Sloping line candidate search: Cython (search_horizontal_in_area_cy / search_vertical_in_area_cy)")
+        else:
+            print("[tv][adding_four_points] Sloping line candidate search: Python fallback (Cython extension not loaded or missing search_*_in_area_cy)")
+        _adding_four_points_cy_candidate_logged = True
     if frame_height > 0 and frame_width > 0:
         y_lo_10_80 = int(frame_height * 0.10)
         y_hi_10_80 = int(frame_height * 0.80)
@@ -8025,6 +8072,7 @@ def adding_four_points(
                             mask_debug_dir=mask_debug_dir,
                             score_only=False,
                             log_context={"transform_idx": tf_idx, "pair_indices": _tpl_indices},
+                            processing_scale=PROCESSING_SCALE,
                         )
                     except Exception:
                         score = 0.0
@@ -9977,6 +10025,7 @@ def main() -> None:
                             frame_number=int(fn),
                             log_frame_number=False,
                             cached_edges=cached_edges,
+                            processing_scale=PROCESSING_SCALE,
                         )
                         parts_ms["step5_score_compare"] = parts_ms.get("step5_score_compare", 0.0) + (time.perf_counter() - t_cmp) * 1000.0
                         if DEBUG_FLAG:
@@ -10737,6 +10786,7 @@ def convert_payload(
                             frame_number=int(fn),
                             log_frame_number=False,
                             cached_edges=cached_edges,
+                            processing_scale=PROCESSING_SCALE,
                         )
                         parts_ms["step5_score_compare"] = parts_ms.get("step5_score_compare", 0.0) + (time.perf_counter() - t_cmp) * 1000.0
                         if DEBUG_FLAG:

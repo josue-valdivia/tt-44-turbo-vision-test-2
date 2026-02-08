@@ -161,9 +161,9 @@
       "kkp5": null,
       "kkp29": null,
       "profile": {
-        "homography_red_ms": 0.2601000014692545,
-        "total_ms": 0.28549996204674244,
-        "edges_dilate_ms": 10.44230000115931
+        "homography_red_ms": 0.20569993648678064,
+        "total_ms": 0.21770002786070108,
+        "edges_dilate_ms": 10.899999993853271
       },
       "H": [
         [
@@ -199,22 +199,22 @@
       "kkp28": null,
       "kkp20": null,
       "profile": {
-        "edges_dilate_ms": 9.772299905307591,
-        "homography_red_ms": 0.2885999856516719,
-        "AB_search_ms": 0.822200090624392,
+        "edges_dilate_ms": 10.51349996123463,
+        "homography_red_ms": 0.30069996137171984,
+        "AB_search_ms": 0.8494999492540956,
         "AB_coarse_candidates": 81,
         "AB_refine_candidates": 9,
         "AB_best_white_rate": 0.0,
-        "CD_search_ms": 0.9740000823512673,
+        "CD_search_ms": 0.9736999636515975,
         "CD_coarse_candidates": 81,
         "CD_refine_candidates": 15,
         "CD_best_white_rate": 0.973404255319149,
-        "EF_search_ms": 0.8106000022962689,
+        "EF_search_ms": 0.80289994366467,
         "EF_best_white_rate": 0.0,
-        "total_ms": 12.695500045083463
+        "total_ms": 13.470200006850064
       }
     },
-    "score": 0.78,
+    "score": 0.77,
     "validation_passed": false,
     "fallback": true,
     "validation_error": "Added four points (fallback)"
