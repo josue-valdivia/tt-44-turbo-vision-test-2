@@ -113,8 +113,8 @@ else:
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = False
-TV_KP_PROFILE: bool = True
+DEBUG_FLAG = True
+TV_KP_PROFILE: bool = False
 ONLY_FRAMES = list(range(2, 3))
 STEP5_ENABLED = True           # score the ordered keypoints
 STEP6_ENABLED = True           # fill missing keypoints using homography from Step 5
@@ -2576,22 +2576,15 @@ def evaluate_keypoints_for_frame(
                             return_h=True,
                         )
                     else:
-                        # Non-polygon: get H only (or H + warped_template when DEBUG). Masks from warp of precomputed template masks.
-                        if DEBUG_FLAG:
-                            warped_template, homography_matrix = project_image_using_keypoints(
-                                image=floor_markings_template,
-                                source_keypoints=template_keypoints,
-                                destination_keypoints=frame_keypoints,
-                                destination_width=frame_width,
-                                destination_height=frame_height,
-                                return_h=True,
-                            )
-                        else:
-                            homography_matrix = _homography_from_keypoints(
-                                template_keypoints,
-                                frame_keypoints,
-                            )
-                            warped_template = None
+                        # Non-polygon: match keypoints_calculate_score — warp template image then extract masks from warped image.
+                        warped_template, homography_matrix = project_image_using_keypoints(
+                            image=floor_markings_template,
+                            source_keypoints=template_keypoints,
+                            destination_keypoints=frame_keypoints,
+                            destination_width=frame_width,
+                            destination_height=frame_height,
+                            return_h=True,
+                        )
             except ValueError as e:
                 # ValueError: < 4 valid keypoints or homography computation failed
                 if DEBUG_FLAG and log_context is None:
@@ -2626,24 +2619,13 @@ def evaluate_keypoints_for_frame(
                         debug_frame_id=frame_number,
                     )
                 else:
-                    # Non-polygon: warp precomputed template masks (no per-pixel threshold on warped image).
-                    tpl_ground, tpl_lines = _get_template_ground_and_line_masks()
-                    mask_ground_bin = cv2.warpPerspective(
-                        tpl_ground,
-                        homography_matrix,
-                        (frame_width, frame_height),
-                        flags=cv2.INTER_NEAREST,
+                    # Non-polygon: match keypoints_calculate_score — extract ground/line masks from warped template image.
+                    if warped_template is None:
+                        raise ValueError("Non-polygon path requires warped_template from project_image_using_keypoints")
+                    mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(
+                        warped_template,
+                        debug_frame_id=frame_number,
                     )
-                    mask_ground_bin = (mask_ground_bin > 0).astype(np.uint8)
-                    mask_lines_expected = cv2.warpPerspective(
-                        tpl_lines,
-                        homography_matrix,
-                        (frame_width, frame_height),
-                        flags=cv2.INTER_NEAREST,
-                    )
-                    mask_lines_expected = (mask_lines_expected > 0).astype(np.uint8)
-                    validate_mask_ground(mask=mask_ground_bin)
-                    validate_mask_lines(mask=mask_lines_expected, debug_frame_id=frame_number)
             except InvalidMask as e:
                 if DEBUG_FLAG and log_context is None:
                     print(f"[DEBUG] {frame_id_str} - Step 4: Mask validation failed: {e}")

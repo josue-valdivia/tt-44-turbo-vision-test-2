@@ -39,7 +39,7 @@ import numpy as np
 ONLY_FRAMES = list(range(2, 3))
 
 # Debug flag: if True, output dtailed logs and step-by-step debug images
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 
 # --------------------------- Data / Models --------------------------- #
 class SVRunOutput:
