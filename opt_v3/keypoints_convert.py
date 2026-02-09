@@ -2798,7 +2798,6 @@ def _load_miner_predictions_from_obj(data: Any, *, frame_width: int | None=None,
         def _in_border(x: float, y: float) -> bool:
             return bool(x < m or x >= float(W) - m or y < m or (y >= float(H) - m))
         removed_total = 0
-        border_points_for_debug: list[tuple[int, int, float, float]] = []
         for frame_id, entry in parsed.items():
             kps = entry.get('keypoints') or []
             labels = entry.get('labels')
@@ -3173,27 +3172,12 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         frame_id = int(frame_id)
     except Exception:
         pass
-    _counts: dict[str, int] = {}
     _profile = False
-    debug_log_lines: list[str] = []
-
-    def _debug_log(msg: str) -> None:
-        pass
-    def _agent_log(message: str, data: dict[str, Any], hypothesis_id: str) -> None:
-        try:
-            payload = {'sessionId': 'debug-session', 'runId': 'pre-fix', 'hypothesisId': hypothesis_id, 'location': 'opt_v3/keypoints_convert.py:adding_four_points', 'message': message, 'data': data, 'timestamp': int(time.time() * 1000)}
-            with open('/home/ubuntu/turbovision/lovely_test/.cursor/debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps(payload, ensure_ascii=True) + '\n')
-        except Exception:
-            pass
 
     def _mark(name: str) -> None:
         pass
 
     def _bump(name: str, n: int=1) -> None:
-        pass
-
-    def _dbglog(hypothesis_id: str, message: str, data: dict[str, Any]) -> None:
         pass
     if frame_img is None:
         frame_img = frame_store.get_frame(frame_id)
@@ -4139,10 +4123,8 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     _bump('seg_left', seg_left_count)
     t_seg_precompute_end = time.perf_counter() if _profile else 0.0
     seg_precompute_ms = float((t_seg_precompute_end - t_seg_precompute_start) * 1000.0)
-    _dbglog('H1', 'seg_precompute_done', {'frame_id': int(frame_id), 'group_name': 'all', 'seg_precompute_ms': float(seg_precompute_ms), 'seg_down': int(seg_down_count), 'seg_up': int(seg_up_count), 'seg_right': int(seg_right_count), 'seg_left': int(seg_left_count)})
 
     def _evaluate_group(group, shared_executor=None):
-        _dbglog('H1', 'group_start', {'frame_id': int(frame_id), 'group_name': str(group.get('name')), 'hcandidates': int(len(horizontal_candidates)), 'vcandidates': int(len(vertical_candidates))})
         try:
             frame_number_val = int(frame_id)
         except Exception:
@@ -4525,12 +4507,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             return None
         selected_lines: list[dict[str, float]] = []
 
-        def _draw_plus(img: np.ndarray, x: int, y: int, size: int=4) -> None:
-            cv2.line(img, (x - size, y), (x + size, y), (0, 0, 255), 1)
-            cv2.line(img, (x, y - size), (x, y + size), (0, 0, 255), 1)
-
-        def _write_keypoints_debug(kps, transform_idx: int) -> None:
-            return
         t_transform_loop_start = time.perf_counter() if _profile else 0.0
         t_transform_select = 0.0
         t_transform_yy2 = 0.0
@@ -4581,10 +4557,8 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             valid_scores.sort(key=lambda x: x[1][0], reverse=True)
             best_idx, (best_score, best_x, best_y, best_transform_idx, best_keypoints) = valid_scores[0]
         t_group_end = time.perf_counter() if _profile else 0.0
-        _dbglog('H2', 'group_end', {'frame_id': int(frame_id), 'group_name': str(group.get('name')), 'best_score': float(best_score), 'valid_scores': int(len(valid_scores))})
         return {'group': group, 'scores_list': scores_list, 'transform_results': transform_results, 'used_parallel_eval': used_parallel_eval, 'horizontal_candidates': horizontal_candidates, 'vertical_candidates': vertical_candidates, 'valid_scores': valid_scores, 'best_score': best_score, 'best_x': best_x, 'best_y': best_y, 'best_transform_idx': best_transform_idx, 'best_keypoints': best_keypoints, 'threshold': None, 'step': COARSE_STEP, 'profile': {'group_ms': (t_group_end - t_group_start) * 1000.0 if _profile else 0.0, 'seg_precompute_ms': float(seg_precompute_ms) if _profile else 0.0, 'transform_select_ms': t_transform_select * 1000.0 if _profile else 0.0, 'transform_yy2_ms': t_transform_yy2 * 1000.0 if _profile else 0.0, 'transform_score_ms': t_transform_score * 1000.0 if _profile else 0.0, 'transform_debug_ms': t_transform_debug * 1000.0 if _profile else 0.0, 'debug_ms': (t_debug_end - t_transform_loop_end) * 1000.0 if _profile else 0.0}}
     group_defs = _get_add4_group_defs(frame_height)
-    _dbglog('H3', 'group_defs', {'frame_id': int(frame_id), 'group_defs_count': int(len(group_defs)), 'group_names': [str(g.get('name')) for g in group_defs]})
     group_results = []
     if TV_AF_EVAL_PARALLEL and (len(group_defs) > 1):
         max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
