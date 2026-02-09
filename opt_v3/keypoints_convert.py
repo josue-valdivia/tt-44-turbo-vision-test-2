@@ -1,3 +1,5 @@
+# cython: boundscheck=True
+# cython: wraparound=True
 from __future__ import annotations
 import argparse
 import functools
