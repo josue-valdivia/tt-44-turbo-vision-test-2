@@ -153,11 +153,12 @@ else:
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = True
-TV_KP_PROFILE: bool = False
-ONLY_FRAMES = list(range(9, 10))
+DEBUG_FLAG = False
+TV_KP_PROFILE: bool = True
+ONLY_FRAMES = list(range(2, 3))
 # Process frames at reduced resolution for speed (segment counts and mask work scale with area)
 PROCESSING_SCALE = 0.5  # 1.0 = full size; 0.5 = half width/height
+REFINE_EXPECTED_MASKS_AT_BOUNDARIES = False  # when True and PROCESSING_SCALE < 1, refine ground/line masks in boundary area
 STEP5_ENABLED = True           # score the ordered keypoints
 STEP6_ENABLED = True           # fill missing keypoints using homography from Step 5
 STEP4_3_ENABLED = True         # refine keypoints with AB/CD lines and H-projected (dilate + green lines)
@@ -788,6 +789,118 @@ class _KPProfiler:
             ot = self.totals_ms.get(ok, 0.0)
             if ot != 0.0:
                 print(f"[tv][kp_profile] {label} total_{ok}_ms={ot:.2f} avg_{ok}_ms={ot/frames:.2f}")
+
+
+def _get_boundary_pixels(mask: np.ndarray) -> np.ndarray:
+    """Binary mask of pixels where black is next to white or white next to black."""
+    mask_bin = (mask > 0).astype(np.uint8) * 255
+    kernel = np.ones((3, 3), np.uint8)
+    eroded = cv2.erode(mask_bin, kernel)
+    dilated = cv2.dilate(mask_bin, kernel)
+    boundary_white = (mask_bin > 0) & (eroded == 0)
+    boundary_black = (mask_bin == 0) & (dilated > 0)
+    return (boundary_white | boundary_black).astype(np.uint8)
+
+
+def _get_refine_area(mask: np.ndarray, dilation_radius: int = 1) -> np.ndarray:
+    """Binary mask: dilation_radius px around boundary pixels (refine area)."""
+    boundary = _get_boundary_pixels(mask)
+    r = max(1, int(dilation_radius))
+    kernel = np.ones((2 * r + 1, 2 * r + 1), np.uint8)
+    return cv2.dilate(boundary, kernel)
+
+
+def _sample_template_at_points(template_gray: np.ndarray, pts_template: np.ndarray) -> np.ndarray:
+    """
+    Bilinear sample template_gray at float coords pts_template (N, 2) as (x, y).
+    Returns array of shape (N,) with sampled values.
+    """
+    th, tw = template_gray.shape
+    x = np.clip(pts_template[:, 0], 0.0, tw - 1.001)
+    y = np.clip(pts_template[:, 1], 0.0, th - 1.001)
+    x0 = np.floor(x).astype(np.int32)
+    y0 = np.floor(y).astype(np.int32)
+    x1 = np.minimum(x0 + 1, tw - 1)
+    y1 = np.minimum(y0 + 1, th - 1)
+    fx = x - x0
+    fy = y - y0
+    v00 = template_gray[y0, x0]
+    v10 = template_gray[y0, x1]
+    v01 = template_gray[y1, x0]
+    v11 = template_gray[y1, x1]
+    return ((1 - fx) * (1 - fy) * v00 + fx * (1 - fy) * v10 + (1 - fx) * fy * v01 + fx * fy * v11).astype(np.float32)
+
+
+def _refine_masks_at_boundaries(
+    mask_ground: np.ndarray,
+    mask_lines: np.ndarray,
+    floor_markings_template: np.ndarray,
+    template_keypoints: list[tuple[int, int]],
+    frame_keypoints: list[tuple[float, float]],
+    frame_width: int,
+    frame_height: int,
+    processing_scale: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Refine expected ground and line masks to match full-res results.
+    When PROCESSING_SCALE < 1: computes full-res masks via inverse mapping at every pixel
+    (guarantees same result as PROCESSING_SCALE=1.0). No full warp — uses homography + sampling.
+    Returns (refined_mask_ground, refined_mask_lines).
+    """
+    # H: template -> frame. H_inv: frame -> template (for inverse mapping).
+    H = _homography_from_keypoints(template_keypoints, frame_keypoints)
+    H_inv = np.linalg.inv(H)
+
+    template_gray = cv2.cvtColor(floor_markings_template, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    th, tw = template_gray.shape
+
+    # All frame pixels (full-res grid); match warpPerspective which uses integer (x, y).
+    xs = np.arange(frame_width, dtype=np.float32)
+    ys = np.arange(frame_height, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, ys)
+    pts_frame = np.column_stack((xx.ravel(), yy.ravel()))
+
+    pts_template = cv2.perspectiveTransform(pts_frame[:, None, :], H_inv)[:, 0, :]
+    # Frame pixels that map outside template must be black (not ground, not line).
+    # Use same effective bounds as warpPerspective with BORDER_CONSTANT: [0, w) x [0, h).
+    out_of_bounds = (
+        (pts_template[:, 0] < 0)
+        | (pts_template[:, 0] >= tw)
+        | (pts_template[:, 1] < 0)
+        | (pts_template[:, 1] >= th)
+    )
+    sampled = _sample_template_at_points(template_gray, pts_template)
+    sampled = np.where(out_of_bounds, 0.0, sampled)
+
+    out_ground = (sampled > 10).astype(np.uint8).reshape(frame_height, frame_width)
+    out_lines = (sampled > 200).astype(np.uint8).reshape(frame_height, frame_width)
+    out_of_bounds_2d = out_of_bounds.reshape(frame_height, frame_width)
+    out_ground[out_of_bounds_2d] = 0
+    out_lines[out_of_bounds_2d] = 0
+    return out_ground, out_lines
+
+
+def _debug_mask_with_edges_red(mask: np.ndarray) -> np.ndarray:
+    """
+    Create BGR visualization of a binary mask with red pixels at black/white boundaries.
+    Red = pixel where black is next to white or white is next to black (4-neighbors).
+    """
+    boundary = _get_boundary_pixels(mask)
+    mask_bin = (mask > 0).astype(np.uint8) * 255
+    out = cv2.cvtColor(mask_bin, cv2.COLOR_GRAY2BGR)
+    out[boundary > 0] = (0, 0, 255)  # BGR red
+    return out
+
+
+def _debug_mask_with_refine_area_red(mask: np.ndarray, dilation_radius: int = 1) -> np.ndarray:
+    """
+    Create BGR visualization of a binary mask with the refine area (dilated boundary) in red.
+    """
+    refine_area = _get_refine_area(mask, dilation_radius)
+    mask_bin = (mask > 0).astype(np.uint8) * 255
+    out = cv2.cvtColor(mask_bin, cv2.COLOR_GRAY2BGR)
+    out[refine_area > 0] = (0, 0, 255)  # BGR red
+    return out
 
 
 def _save_step(name: str, img: np.ndarray, frame_number: int | None = None) -> None:
@@ -2332,6 +2445,10 @@ def evaluate_keypoints_for_frame(
         t_val_precheck = 0.0
         t_val_project = 0.0
         t_val_masks = 0.0
+        t_val_masks_extract = 0.0
+        t_val_masks_upsample = 0.0
+        t_val_masks_refine_warp = 0.0
+        t_val_masks_refine_extract = 0.0
         t_val_pred = 0.0
         # Enable cache for polygon scoring too; cache_key includes frame_keypoints so different
         # transforms get different entries. Helps when same keypoints re-evaluated (e.g. refinement).
@@ -2373,6 +2490,16 @@ def evaluate_keypoints_for_frame(
                     float(t_val_project * 1000.0),
                     float(t_val_masks * 1000.0),
                     float(t_val_pred * 1000.0),
+                )
+            )
+            print(
+                "[tv][kp_score_profile] masks breakdown extract_ms=%.2f upsample_ms=%.2f "
+                "refine_warp_ms=%.2f refine_extract_ms=%.2f"
+                % (
+                    float(t_val_masks_extract * 1000.0),
+                    float(t_val_masks_upsample * 1000.0),
+                    float(t_val_masks_refine_warp * 1000.0),
+                    float(t_val_masks_refine_extract * 1000.0),
                 )
             )
             print(
@@ -2693,12 +2820,16 @@ def evaluate_keypoints_for_frame(
                     # Non-polygon: match keypoints_calculate_score — extract ground/line masks from warped template image.
                     if warped_template is None:
                         raise ValueError("Non-polygon path requires warped_template from project_image_using_keypoints")
+                    _t = time.perf_counter() if _score_profile else 0.0
                     mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(
                         warped_template,
                         debug_frame_id=frame_number,
                     )
+                    if _score_profile:
+                        t_val_masks_extract += time.perf_counter() - _t
                     # If computed at reduced resolution, upsample masks to full frame size (1/processing_scale).
                     if 0 < processing_scale < 1.0:
+                        _t = time.perf_counter() if _score_profile else 0.0
                         mask_ground_bin = cv2.resize(
                             mask_ground_bin,
                             (frame_width, frame_height),
@@ -2711,6 +2842,38 @@ def evaluate_keypoints_for_frame(
                             interpolation=cv2.INTER_NEAREST,
                         )
                         mask_lines_expected = (mask_lines_expected > 0).astype(np.uint8)
+                        if _score_profile:
+                            t_val_masks_upsample += time.perf_counter() - _t
+                        # Refine expected masks: use full-res warp + extract so refined == full-res (pixel-perfect).
+                        if REFINE_EXPECTED_MASKS_AT_BOUNDARIES:
+                            tpl = floor_markings_template if floor_markings_template is not None else challenge_template()
+                            if tpl is not None:
+                                if DEBUG_FLAG and log_context is None:
+                                    rough_line_mask = mask_lines_expected.copy()
+                                    _save_step("debug_rough_line_mask", rough_line_mask * 255, frame_number)
+                                    _save_step("debug_rough_line_mask_edges_red", _debug_mask_with_edges_red(rough_line_mask), frame_number)
+                                    _dilation_radius = max(1, int(np.ceil(1.0 / processing_scale)))
+                                    _save_step("debug_rough_line_mask_refine_area_red", _debug_mask_with_refine_area_red(rough_line_mask, _dilation_radius), frame_number)
+                                _t = time.perf_counter() if _score_profile else 0.0
+                                warped_full, _ = project_image_using_keypoints(
+                                    image=tpl,
+                                    source_keypoints=template_keypoints,
+                                    destination_keypoints=frame_keypoints,
+                                    destination_width=frame_width,
+                                    destination_height=frame_height,
+                                    return_h=True,
+                                )
+                                if _score_profile:
+                                    t_val_masks_refine_warp += time.perf_counter() - _t
+                                _t = time.perf_counter() if _score_profile else 0.0
+                                mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(
+                                    warped_full, debug_frame_id=frame_number
+                                )
+                                if _score_profile:
+                                    t_val_masks_refine_extract += time.perf_counter() - _t
+                                if DEBUG_FLAG and log_context is None:
+                                    _save_step("debug_refined_line_mask", mask_lines_expected * 255, frame_number)
+                                    _save_step("debug_fullres_line_mask", mask_lines_expected * 255, frame_number)
             except InvalidMask as e:
                 if DEBUG_FLAG and log_context is None:
                     print(f"[DEBUG] {frame_id_str} - Step 4: Mask validation failed: {e}")
@@ -2729,7 +2892,9 @@ def evaluate_keypoints_for_frame(
         
         if DEBUG_FLAG and mask_debug_dir is None:
             _save_step("step2_mask_ground", mask_ground_bin * 255, frame_number)
+            _save_step("step2_mask_ground_edges_red", _debug_mask_with_edges_red(mask_ground_bin), frame_number)
             _save_step("step3_mask_lines_expected", mask_lines_expected * 255, frame_number)
+            _save_step("step3_mask_lines_expected_edges_red", _debug_mask_with_edges_red(mask_lines_expected), frame_number)
         # PERF: `extract_masks_for_ground_and_lines()` already calls validate_mask_ground/lines
         # (and would have raised InvalidMask). Avoid validating a second time.
         
