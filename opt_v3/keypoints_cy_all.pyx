@@ -278,10 +278,12 @@ def connected_by_segment(
     int close_ksize=0,
     double min_hit_ratio=0.35,
     int max_gap_px=35,
+    int sample_step=1,
 ):
     """
     Cythonized variant of _connected_by_segment.
     Assumes mask is uint8 and already closed (close_ksize must be 0).
+    sample_step: sample every Nth pixel along the line (1=all, 2=every 2nd).
     """
     cdef int x1 = <int>p1[0]
     cdef int y1 = <int>p1[1]
@@ -294,6 +296,8 @@ def connected_by_segment(
     cdef int L = <int>sqrt(dx * dx + dy * dy)
     if L < 2:
         return False, 0.0, L
+    if sample_step < 1:
+        sample_step = 1
 
     cdef double step_x = dx / <double>L
     cdef double step_y = dy / <double>L
@@ -301,13 +305,14 @@ def connected_by_segment(
     cdef int hits = 0
     cdef int longest = 0
     cdef int cur = 0
-    cdef int i, xi, yi, x0, x1b, y0, y1b
+    cdef int i, xi, yi, x0, x1b, y0, y1b, gap_px
     cdef int yy, xx
     cdef bint hit
     cdef double x, y
     cdef int r = sample_radius
+    cdef int step = sample_step
 
-    for i in range(total):
+    for i in range(0, total, step):
         x = x1 + step_x * i
         y = y1 + step_y * i
         xi = <int>_py_round(x)
@@ -339,10 +344,12 @@ def connected_by_segment(
             cur = 0
         else:
             cur += 1
-            if cur > longest:
-                longest = cur
+            gap_px = cur * step
+            if gap_px > longest:
+                longest = gap_px
 
-    cdef double hit_ratio = hits / <double>total
+    cdef int total_sampled = (total + step - 1) // step
+    cdef double hit_ratio = hits / <double>total_sampled if total_sampled > 0 else 0.0
     cdef bint ok = (hit_ratio >= min_hit_ratio) and (longest <= max_gap_px)
     return ok, hit_ratio, longest
 

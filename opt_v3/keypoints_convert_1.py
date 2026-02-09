@@ -9,7 +9,6 @@ import logging
 from operator import truediv
 import os
 import sys
-import threading
 import time
 import importlib.util
 from collections import OrderedDict, deque
@@ -134,12 +133,6 @@ if _cy_module is not None:
     _normalize_keypoints_cy = getattr(_cy_module, "normalize_keypoints", None)
     _search_horizontal_in_area_cy = getattr(_cy_module, "search_horizontal_in_area_cy", None)
     _search_vertical_in_area_cy = getattr(_cy_module, "search_vertical_in_area_cy", None)
-    _search_horizontal_in_area_integral_cy = getattr(
-        _cy_module, "search_horizontal_in_area_integral_cy", None
-    )
-    _search_vertical_in_area_integral_cy = getattr(
-        _cy_module, "search_vertical_in_area_integral_cy", None
-    )
     _sloping_line_white_count_cy = getattr(_cy_module, "sloping_line_white_count_cy", None)
 else:
     _seg_candidates_col_cy = None
@@ -148,14 +141,12 @@ else:
     _normalize_keypoints_cy = None
     _search_horizontal_in_area_cy = None
     _search_vertical_in_area_cy = None
-    _search_horizontal_in_area_integral_cy = None
-    _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 TV_KP_PROFILE: bool = False
-ONLY_FRAMES = list(range(9, 10))
+# ONLY_FRAMES = list(range(2, 3))
 # Process frames at reduced resolution for speed (segment counts and mask work scale with area)
 PROCESSING_SCALE = 0.5  # 1.0 = full size; 0.5 = half width/height
 STEP5_ENABLED = True           # score the ordered keypoints
@@ -3150,35 +3141,13 @@ def _step1_build_connections(
     Step 1: build keypoint connections for a frame.
     Returns a step1_entry dict compatible with the existing pipeline.
     """
-    orig_frame_width = frame_width
-    orig_frame_height = frame_height
-    orig_kps = list(kps) if kps else []
-
-    scale = float(PROCESSING_SCALE)
-    if scale < 1.0 and scale > 0:
-        new_w = max(1, int(frame_width * scale))
-        new_h = max(1, int(frame_height * scale))
-        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        if cached_edges is not None:
-            cached_edges = cv2.resize(
-                cached_edges, (new_w, new_h), interpolation=cv2.INTER_NEAREST
-            )
-        kps = [
-            [float(p[0]) * scale, float(p[1]) * scale] if p and len(p) >= 2 else (p or [0.0, 0.0])
-            for p in (kps or [])
-        ]
-        frame_width, frame_height = new_w, new_h
-
     ground_mask = np.ones(frame.shape[:2], dtype=np.uint8)
     mask_pred = extract_mask_of_ground_lines_in_image(
-        image=frame,
-        ground_mask=ground_mask,
-        cached_edges=cached_edges,
-        dilate_iterations=2,
+        image=frame, ground_mask=ground_mask, cached_edges=cached_edges
     )
     # Precompute closed mask once per frame; _connected_by_segment will skip per-pair closing.
     m_closed = (mask_pred > 0).astype(np.uint8) * 255
-    close_ksize = 3
+    close_ksize = 5
     if close_ksize and close_ksize > 1:
         k = _kernel_ellipse_5() if close_ksize == 5 else cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (close_ksize, close_ksize)
@@ -3186,38 +3155,27 @@ def _step1_build_connections(
         m_closed = cv2.morphologyEx(m_closed, cv2.MORPH_CLOSE, k, iterations=1)
 
     good_details: list[tuple[int, int, float, int]] = []
+    seen: set[tuple[int, int]] = set()
     valid_idx = [
         idx_v
         for idx_v, pt in enumerate(kps or [])
         if pt and len(pt) >= 2 and not (pt[0] == 0 and pt[1] == 0)
     ]
-    pairs = list(combinations(valid_idx, 2))
-
-    def _check_pair(pair: tuple[int, int]) -> tuple[int, int, float, int] | None:
-        i, j = pair
+    for i, j in combinations(valid_idx, 2):
+        pair = tuple(sorted((i, j)))
+        if pair in seen:
+            continue
+        seen.add(pair)
         p1 = kps[i]
         p2 = kps[j]
         ok, hit_ratio, longest = _connected_by_segment(
             m_closed,
             tuple(p1),
             tuple(p2),
-            sample_radius=3,
             close_ksize=0,
-            sample_step=2,
         )
-        return (i, j, hit_ratio, longest) if ok else None
-
-    if len(pairs) > 1:
-        max_workers = min(len(pairs), TV_AF_EVAL_MAX_WORKERS)
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for result in ex.map(_check_pair, pairs):
-                if result is not None:
-                    good_details.append(result)
-    else:
-        for pair in pairs:
-            result = _check_pair(pair)
-            if result is not None:
-                good_details.append(result)
+        if ok:
+            good_details.append((i, j, hit_ratio, longest))
 
     pair_to_len: dict[tuple[int, int], float] = {}
     for i, j, _, _ in good_details:
@@ -3250,8 +3208,8 @@ def _step1_build_connections(
 
     return {
         "frame_id": int(frame_number),
-        "frame_size": [int(orig_frame_width), int(orig_frame_height)],
-        "keypoints": [None if (pt is None) else [float(x) for x in pt] for pt in orig_kps],
+        "frame_size": [int(frame_width), int(frame_height)],
+        "keypoints": [None if (pt is None) else [float(x) for x in pt] for pt in (kps or [])],
         "labels": labels,
         "connections": frame_connections,
     }
@@ -4075,13 +4033,21 @@ def _step3_build_ordered_candidates(
             arr = arr[:, :4]
         return arr
 
-    def _process_one_quad(quad: list[int]) -> dict[str, Any]:
+    for quad in frame_four_points:
+        n_quads += 1
         pattern = _pattern_for_quad(quad, frame_edge_set)
+        if do_prof:
+            t0 = time.perf_counter()
         pattern_key = expanded_patterns_cache.get(pattern)
         if pattern_key is None:
             pattern_set = _expanded_patterns(pattern)
             pattern_key = tuple(sorted(pattern_set))
             expanded_patterns_cache[pattern] = pattern_key
+        if do_prof:
+            t_pat_expand += (time.perf_counter() - t0) * 1000.0
+
+        if do_prof:
+            t0 = time.perf_counter()
         candidates_all: list[tuple[int, ...]] | None = None
         candidates: list[tuple[int, ...]] = []
         cand_arr_cached: np.ndarray | None = None
@@ -4096,13 +4062,21 @@ def _step3_build_ordered_candidates(
             )
             cached = True
         except Exception:
-            pattern_set = _expanded_patterns(pattern)
+            # Fallback to uncached path if cache has issues
             candidates_all = []
             for pat in pattern_set:
                 candidates_all.extend(patterns_src.get(pat, []))
             candidates = list(candidates_all)
             cand_all_len = len(candidates_all)
             cand_unique_len = len(candidates)
+        if do_prof:
+            t_pat_collect += (time.perf_counter() - t0) * 1000.0
+            t_pat += (time.perf_counter() - t0) * 1000.0
+
+        if do_prof:
+            n_cand_all += cand_all_len
+            t0 = time.perf_counter()
+        # If we hit the cache, candidates are already unique.
         if not cached and candidates_all is not None:
             if len(pattern_key) == 1:
                 candidates = list(candidates_all)
@@ -4115,17 +4089,42 @@ def _step3_build_ordered_candidates(
                         continue
                     seen_cand.add(tup)
                     candidates.append(cand)
+        if do_prof:
+            t_dedupe += (time.perf_counter() - t0) * 1000.0
+            n_cand_unique += cand_unique_len if cached else len(candidates)
+            max_cand_unique = max(max_cand_unique, len(candidates))
+
+        # If we used precomputed patterns_src for left/right, the candidates are already allowed-filtered.
         if patterns_src is template_patterns:
             if allowed_set is not None:
+                if do_prof:
+                    t0 = time.perf_counter()
                 candidates = [cand for cand in candidates if all(node in allowed_set for node in cand)]
+                if do_prof:
+                    t_allowed += (time.perf_counter() - t0) * 1000.0
+                    n_after_allowed += len(candidates)
+            else:
+                if do_prof:
+                    n_after_allowed += len(candidates)
+        else:
+            if do_prof:
+                # Already filtered by allowed in patterns_src
+                n_after_allowed += len(candidates)
+
         if cached and cand_arr_cached is not None:
+            # Safe to reuse cached array only when no additional filtering was applied.
             if patterns_src_key != "all" or allowed_set is None:
                 cand_arr = cand_arr_cached
+
         if template_labels:
+            if do_prof:
+                t0 = time.perf_counter()
             if _step3_filter_labels_cy is not None and candidates:
                 quad_arr = np.asarray(quad[:4], dtype=np.int32)
                 if cand_arr is None:
                     cand_arr = _cand_arr_from_candidates(candidates)
+                if do_prof:
+                    t1 = time.perf_counter()
                 keep_idx = _step3_filter_labels_cy(
                     cand_arr,
                     quad_arr,
@@ -4133,12 +4132,23 @@ def _step3_build_ordered_candidates(
                     template_labels_arr,
                     constraints_mask_arr,
                 )
+                if do_prof:
+                    t_label_cy += (time.perf_counter() - t1) * 1000.0
+                    n_label_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
                 if cand_arr is not None:
                     cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _labels_match(cand, quad)]
                 cand_arr = None
+            if do_prof:
+                t_label += (time.perf_counter() - t0) * 1000.0
+                n_after_label += len(candidates)
+            else:
+                n_after_label += len(candidates)
+
+            if do_prof:
+                t0 = time.perf_counter()
             before_label_conn = len(candidates)
             use_cy_connlabel = False
             quad4 = quad[:4]
@@ -4159,6 +4169,8 @@ def _step3_build_ordered_candidates(
                     decision_flag = 0
                 elif decision == "right":
                     decision_flag = 1
+                if do_prof:
+                    t1 = time.perf_counter()
                 keep_idx = _step3_conn_label_constraints_cy(
                     cand_arr,
                     quad_arr,
@@ -4170,18 +4182,26 @@ def _step3_build_ordered_candidates(
                     int(label1_max_idx) if label1_max_idx is not None else -1,
                     decision_flag,
                 )
+                if do_prof:
+                    t_connlabel_cy += (time.perf_counter() - t1) * 1000.0
+                    n_connlabel_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
                 if cand_arr is not None:
                     cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _check_connection_label_constraints(cand, quad)]
                 cand_arr = None
+            if do_prof:
+                t_connlabel += (time.perf_counter() - t0) * 1000.0
+                n_after_connlabel += len(candidates)
             if DEBUG_FLAG and before_label_conn > len(candidates):
                 print(
                     f"[DEBUG] Frame {frame_number} - Step 3: Connection label constraints reduced candidates from "
                     f"{before_label_conn} to {len(candidates)}"
                 )
 
+            if do_prof:
+                t0 = time.perf_counter()
             before_conn = len(candidates)
             quad4 = quad[:4]
             use_cy_conn = False
@@ -4197,6 +4217,8 @@ def _step3_build_ordered_candidates(
                 quad_arr = np.asarray(quad[:4], dtype=np.int32)
                 if cand_arr is None:
                     cand_arr = _cand_arr_from_candidates(candidates)
+                if do_prof:
+                    t1 = time.perf_counter()
                 keep_idx = _step3_conn_constraints_cy(
                     cand_arr,
                     quad_arr,
@@ -4205,12 +4227,18 @@ def _step3_build_ordered_candidates(
                     template_adj_mask,
                     template_reach2_mask,
                 )
+                if do_prof:
+                    t_conn_cy += (time.perf_counter() - t1) * 1000.0
+                    n_conn_cy += 1
                 candidates = [candidates[i] for i in keep_idx]
                 if cand_arr is not None:
                     cand_arr = cand_arr[keep_idx]
             else:
                 candidates = [cand for cand in candidates if _check_connection_constraints(cand, quad)]
                 cand_arr = None
+            if do_prof:
+                t_conn += (time.perf_counter() - t0) * 1000.0
+                n_after_conn += len(candidates)
             if DEBUG_FLAG:
                 if before_conn > len(candidates):
                     print(
@@ -4222,36 +4250,35 @@ def _step3_build_ordered_candidates(
                         f"[DEBUG] Frame {frame_number} - Step 3: Connection constraints: {before_conn} candidates, none rejected"
                     )
 
+            if do_prof:
+                t0 = time.perf_counter()
+            # Normalize candidates to lists only when the Python y-order check runs.
             filtered: list[list[int]] = []
             for cand in candidates:
                 cand_seq = list(cand) if isinstance(cand, tuple) else cand
                 if _validate_y_ordering_partial(cand_seq, quad, frame_keypoints):
                     filtered.append(cand_seq)
             candidates = filtered
-        return {
-            "four_points": quad,
-            "candidates": candidates,
-            "candidates_count": len(candidates),
-        }
+            if do_prof:
+                t_y += (time.perf_counter() - t0) * 1000.0
+                n_after_y += len(candidates)
+        else:
+            if do_prof:
+                n_after_label += len(candidates)
+                n_after_connlabel += len(candidates)
+                n_after_conn += len(candidates)
+                n_after_y += len(candidates)
 
-    if len(frame_four_points) > 1:
-        step3_workers = min(len(frame_four_points), TV_AF_EVAL_MAX_WORKERS)
-        with ThreadPoolExecutor(max_workers=step3_workers) as ex:
-            mapped = list(ex.map(_process_one_quad, frame_four_points))
         if do_prof:
-            n_quads = len(frame_four_points)
-    else:
-        for quad in frame_four_points:
-            n_quads += 1
-            if do_prof:
-                t0 = time.perf_counter()
-            entry = _process_one_quad(quad)
-            if do_prof:
-                t_pat += (time.perf_counter() - t0) * 1000.0
-            mapped.append(entry)
-            if do_prof:
-                n_cand_all += entry.get("candidates_count", 0)
-                max_cand_final = max(max_cand_final, entry.get("candidates_count", 0))
+            max_cand_final = max(max_cand_final, len(candidates))
+
+        mapped.append(
+            {
+                "four_points": quad,
+                "candidates": candidates,
+                "candidates_count": len(candidates),
+            }
+        )
 
     out = {
         "frame_id": step2_entry["frame_id"],
@@ -6133,7 +6160,6 @@ def _connected_by_segment(
     close_ksize: int = 5,
     min_hit_ratio: float = 0.35,
     max_gap_px: int = 20,
-    sample_step: int = 1,
 ) -> tuple[bool, float, int]:
     # Use Cython fast path when available and closing is already handled by caller.
     if _connected_by_segment_cy is not None and close_ksize == 0:
@@ -6150,7 +6176,6 @@ def _connected_by_segment(
             0,
             float(min_hit_ratio),
             int(max_gap_px),
-            int(sample_step),
         )
     return _connected_by_segment_py(
         mask,
@@ -6260,7 +6285,6 @@ _STEP3_PATTERN_CACHE: dict[str, OrderedDict[tuple[tuple[bool, ...], ...], tuple[
     "left": OrderedDict(),
     "right": OrderedDict(),
 }
-_STEP3_CACHE_LOCK = threading.Lock()
 
 
 def _get_step3_candidates_cached(
@@ -6269,39 +6293,39 @@ def _get_step3_candidates_cached(
     pattern_key: tuple[tuple[bool, ...], ...],
     patterns_src: dict[tuple[bool, ...], list],
 ) -> tuple[list[tuple[int, ...]], np.ndarray, int, int]:
-    with _STEP3_CACHE_LOCK:
-        cache = _STEP3_PATTERN_CACHE[cache_key]
-        cached = cache.pop(pattern_key, None)
-        if cached is not None:
-            cache[pattern_key] = cached
-            return cached
-        candidates_all: list[tuple[int, ...]] = []
-        for pat in pattern_key:
-            candidates_all.extend(patterns_src.get(pat, []))
-        if len(pattern_key) == 1:
-            candidates = list(candidates_all)
-            cand_unique_len = len(candidates)
-        else:
-            seen: set[tuple[int, ...]] = set()
-            candidates = []
-            for cand in candidates_all:
-                tup = cand if isinstance(cand, tuple) else tuple(cand)
-                if tup in seen:
-                    continue
-                seen.add(tup)
-                candidates.append(tup)
-            cand_unique_len = len(candidates)
-        cand_all_len = len(candidates_all)
-        cand_arr = np.asarray(candidates, dtype=np.int32)
-        if cand_arr.ndim != 2 or cand_arr.shape[1] < 4:
-            cand_arr = np.asarray([c[:4] for c in candidates], dtype=np.int32)
-        elif cand_arr.shape[1] > 4:
-            cand_arr = cand_arr[:, :4]
-        out = (candidates, cand_arr, cand_all_len, cand_unique_len)
-        cache[pattern_key] = out
-        if len(cache) > STEP3_PATTERN_CACHE_MAX:
-            cache.popitem(last=False)
-        return out
+    cache = _STEP3_PATTERN_CACHE[cache_key]
+    cached = cache.pop(pattern_key, None)
+    if cached is not None:
+        # refresh LRU
+        cache[pattern_key] = cached
+        return cached
+    candidates_all: list[tuple[int, ...]] = []
+    for pat in pattern_key:
+        candidates_all.extend(patterns_src.get(pat, []))
+    if len(pattern_key) == 1:
+        candidates = list(candidates_all)
+        cand_unique_len = len(candidates)
+    else:
+        seen: set[tuple[int, ...]] = set()
+        candidates = []
+        for cand in candidates_all:
+            tup = cand if isinstance(cand, tuple) else tuple(cand)
+            if tup in seen:
+                continue
+            seen.add(tup)
+            candidates.append(tup)
+        cand_unique_len = len(candidates)
+    cand_all_len = len(candidates_all)
+    cand_arr = np.asarray(candidates, dtype=np.int32)
+    if cand_arr.ndim != 2 or cand_arr.shape[1] < 4:
+        cand_arr = np.asarray([c[:4] for c in candidates], dtype=np.int32)
+    elif cand_arr.shape[1] > 4:
+        cand_arr = cand_arr[:, :4]
+    out = (candidates, cand_arr, cand_all_len, cand_unique_len)
+    cache[pattern_key] = out
+    if len(cache) > STEP3_PATTERN_CACHE_MAX:
+        cache.popitem(last=False)
+    return out
 
 
 @functools.lru_cache(maxsize=1)
@@ -6705,15 +6729,6 @@ def adding_four_points(
     _edges_flat_cy = (
         np.ascontiguousarray(binary_edges, dtype=np.uint8).ravel()
         if (_search_horizontal_in_area_cy is not None or _search_vertical_in_area_cy is not None)
-        else None
-    )
-    # Integral image flat for integral-based Cython search (faster band sum).
-    _integral_flat_cy = (
-        np.ascontiguousarray(ii, dtype=np.float64).ravel()
-        if (
-            _search_horizontal_in_area_integral_cy is not None
-            and _search_vertical_in_area_integral_cy is not None
-        )
         else None
     )
 
@@ -7163,22 +7178,7 @@ def adding_four_points(
         """Search horizontal sloping line yy1-yy2 in [y_lo, y_hi] with 1 < |yy1-yy2| < max_slope. Return best candidate or None."""
         if y_hi <= y_lo + MIN_SLOPE_PX:
             return None
-        if _search_horizontal_in_area_integral_cy is not None and _integral_flat_cy is not None:
-            by0, by1, bwhite, btotal = _search_horizontal_in_area_integral_cy(
-                _integral_flat_cy,
-                frame_width,
-                frame_height,
-                y_lo,
-                y_hi,
-                max_slope,
-                COARSE_STEP,
-                REFINE_RADIUS,
-                REFINE_STEP,
-                MIN_SLOPE_PX,
-                SLOPING_LINE_HALF_WIDTH,
-                SLOPING_LINE_SAMPLE_MAX,
-            )
-        elif _search_horizontal_in_area_cy is not None and _edges_flat_cy is not None:
+        if _search_horizontal_in_area_cy is not None and _edges_flat_cy is not None:
             by0, by1, bwhite, btotal = _search_horizontal_in_area_cy(
                 _edges_flat_cy,
                 frame_width,
@@ -7193,23 +7193,16 @@ def adding_four_points(
                 SLOPING_LINE_HALF_WIDTH,
                 SLOPING_LINE_SAMPLE_MAX,
             )
-        else:
-            by0, by1, bwhite, btotal = -1, -1, -1, -1
-        if by0 >= 0 and btotal > 0:
-            mid_y = (by0 + by1) / 2.0
-            return {
-                "pos": mid_y,
-                "start": float(by0),
-                "count": float(bwhite),
-                "rate": bwhite / btotal,
-                "y0": float(by0),
-                "y1": float(by1),
-            }
-        used_cython = (
-            (_search_horizontal_in_area_integral_cy is not None and _integral_flat_cy is not None)
-            or (_search_horizontal_in_area_cy is not None and _edges_flat_cy is not None)
-        )
-        if used_cython:
+            if by0 >= 0 and btotal > 0:
+                mid_y = (by0 + by1) / 2.0
+                return {
+                    "pos": mid_y,
+                    "start": float(by0),
+                    "count": float(bwhite),
+                    "rate": bwhite / btotal,
+                    "y0": float(by0),
+                    "y1": float(by1),
+                }
             return None
         best_count = -1
         best_y0, best_y1 = y_lo, y_lo + MIN_SLOPE_PX
@@ -7256,22 +7249,7 @@ def adding_four_points(
         """Search vertical sloping line x1-x2 in [x_lo, x_hi] with 1 < |x1-x0| < max_slope. Return best candidate or None."""
         if x_hi <= x_lo + MIN_SLOPE_PX:
             return None
-        if _search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None:
-            bx0, bx1, bwhite, btotal = _search_vertical_in_area_integral_cy(
-                _integral_flat_cy,
-                frame_width,
-                frame_height,
-                x_lo,
-                x_hi,
-                max_slope,
-                COARSE_STEP,
-                REFINE_RADIUS,
-                REFINE_STEP,
-                MIN_SLOPE_PX,
-                SLOPING_LINE_HALF_WIDTH,
-                SLOPING_LINE_SAMPLE_MAX,
-            )
-        elif _search_vertical_in_area_cy is not None and _edges_flat_cy is not None:
+        if _search_vertical_in_area_cy is not None and _edges_flat_cy is not None:
             bx0, bx1, bwhite, btotal = _search_vertical_in_area_cy(
                 _edges_flat_cy,
                 frame_width,
@@ -7286,23 +7264,16 @@ def adding_four_points(
                 SLOPING_LINE_HALF_WIDTH,
                 SLOPING_LINE_SAMPLE_MAX,
             )
-        else:
-            bx0, bx1, bwhite, btotal = -1, -1, -1, -1
-        if bx0 >= 0 and btotal > 0:
-            mid_x = (bx0 + bx1) / 2.0
-            return {
-                "pos": mid_x,
-                "start": float(bx0),
-                "count": float(bwhite),
-                "rate": bwhite / btotal,
-                "x0": float(bx0),
-                "x1": float(bx1),
-            }
-        used_cython = (
-            (_search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None)
-            or (_search_vertical_in_area_cy is not None and _edges_flat_cy is not None)
-        )
-        if used_cython:
+            if bx0 >= 0 and btotal > 0:
+                mid_x = (bx0 + bx1) / 2.0
+                return {
+                    "pos": mid_x,
+                    "start": float(bx0),
+                    "count": float(bwhite),
+                    "rate": bwhite / btotal,
+                    "x0": float(bx0),
+                    "x1": float(bx1),
+                }
             return None
         best_count = -1
         best_x0, best_x1 = x_lo, x_lo + MIN_SLOPE_PX
@@ -7357,12 +7328,10 @@ def adding_four_points(
     v_10_80: dict[str, float] | None = None
     if DEBUG_FLAG:
         print(f"[DEBUG] Frame {frame_id} - adding_four_points: Searching for 10px sloping lines in overall areas")
-    # One-time log: Cython integral vs Cython edges vs Python for horizontal/vertical candidate search
+    # One-time log: Cython vs Python for horizontal/vertical candidate search
     global _adding_four_points_cy_candidate_logged
     if not _adding_four_points_cy_candidate_logged:
-        if _search_horizontal_in_area_integral_cy is not None and _search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None:
-            print("[tv][adding_four_points] Sloping line candidate search: Cython integral (search_*_in_area_integral_cy)")
-        elif _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
+        if _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
             print("[tv][adding_four_points] Sloping line candidate search: Cython (search_horizontal_in_area_cy / search_vertical_in_area_cy)")
         else:
             print("[tv][adding_four_points] Sloping line candidate search: Python fallback (Cython extension not loaded or missing search_*_in_area_cy)")
