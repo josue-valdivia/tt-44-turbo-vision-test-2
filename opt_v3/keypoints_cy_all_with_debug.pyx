@@ -20,6 +20,10 @@ def segments_from_col_band(
     int step,
     int total_pixels,
 ):
+    """
+    Build segment candidates for vertical slices.
+    Returns list of {"x": float, "rate": float} sorted by rate desc.
+    """
     cdef Py_ssize_t n = col_band.shape[0]
     if n <= 0 or seg_width <= 0 or step <= 0:
         return []
@@ -58,6 +62,10 @@ def segments_from_row_band(
     int step,
     int total_pixels,
 ):
+    """
+    Build segment candidates for horizontal slices.
+    Returns list of {"y": float, "rate": float} sorted by rate desc.
+    """
     cdef Py_ssize_t n = row_band.shape[0]
     if n <= 0 or seg_width <= 0 or step <= 0:
         return []
@@ -224,6 +232,10 @@ def precompute_segments_from_prefix(
     int seg_width,
     int seg_step,
 ):
+    """
+    Precompute segment candidates for all horizontal/vertical lines using prefix sums.
+    Returns (seg_down_by_line, seg_up_by_line, seg_right_by_line, seg_left_by_line).
+    """
     cdef dict seg_down_by_line = {}
     cdef dict seg_up_by_line = {}
     cdef dict seg_right_by_line = {}
@@ -268,6 +280,11 @@ def connected_by_segment(
     int max_gap_px=35,
     int sample_step=1,
 ):
+    """
+    Cythonized variant of _connected_by_segment.
+    Assumes mask is uint8 and already closed (close_ksize must be 0).
+    sample_step: sample every Nth pixel along the line (1=all, 2=every 2nd).
+    """
     cdef int x1 = <int>p1[0]
     cdef int y1 = <int>p1[1]
     cdef int x2 = <int>p2[0]
@@ -339,6 +356,10 @@ def connected_by_segment(
 
 # ---- from _eval_kp_helpers_cy.pyx ----
 def normalize_keypoints(original_keypoints, int frame_width, int frame_height):
+    """
+    Normalize keypoints to float tuples and clamp out-of-bounds to (0, 0).
+    Mirrors evaluate_keypoints_for_frame Step 0 behavior.
+    """
     cdef Py_ssize_t n = len(original_keypoints)
     cdef Py_ssize_t i
     cdef object pt
@@ -380,6 +401,10 @@ def filter_connection_constraints(
     cnp.ndarray[cnp.uint64_t, ndim=1] template_adj_mask,
     cnp.ndarray[cnp.uint64_t, ndim=1] template_reach2_mask,
 ):
+    """
+    Fast connection-constraint filtering for Step 3.
+    Returns a list of candidate indices to keep.
+    """
     cdef Py_ssize_t n = candidates.shape[0]
     cdef Py_ssize_t i, j, k
     cdef int q0 = quad[0]
@@ -446,6 +471,10 @@ def filter_connection_label_constraints(
     int label1_max_idx,
     int decision_flag,  # -1 none, 0 left, 1 right
 ):
+    """
+    Fast connection-label-constraint filtering for Step 3.
+    Returns a list of candidate indices to keep.
+    """
     cdef Py_ssize_t n = candidates.shape[0]
     cdef Py_ssize_t i
     cdef int idx, qi, ti, nb, lab
@@ -520,6 +549,10 @@ def filter_labels(
     cnp.ndarray[cnp.int32_t, ndim=1] template_labels,
     cnp.ndarray[cnp.int64_t, ndim=1] constraints_mask,
 ):
+    """
+    Fast label/constraint filtering for Step 3.
+    Returns a list of candidate indices to keep.
+    """
     cdef Py_ssize_t n = candidates.shape[0]
     cdef Py_ssize_t i, j
     cdef int ci, qi
@@ -565,6 +598,10 @@ def sloping_line_white_count_cy(
     int half_width,
     int sample_max,
 ):
+    """
+    Count white pixels in a (2*half_width+1)-px band along (ax,ay)->(bx,by).
+    Returns (white_count, total_unique_pixel_count). Matches Python _sloping_line_white_count logic.
+    """
     cdef double L = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
     if L < 1.0:
         return 0, 0
@@ -622,6 +659,11 @@ def sloping_line_white_count_integral_cy(
     int half_width,
     int sample_max,
 ):
+    """
+    Count white pixels in (2*half_width+1)-px band along (ax,ay)->(bx,by) using integral image.
+    integral_flat: flattened cv2.integral(edges), shape (h+1)*(w+1), stride = w+1.
+    Returns (white_count, total_pixel_count_approx). Band approximated by axis-aligned rectangles.
+    """
     cdef double L = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
     if L < 1.0:
         return 0, 0
@@ -677,6 +719,10 @@ def search_horizontal_in_area_cy(
     int half_width,
     int sample_max,
 ):
+    """
+    Search horizontal sloping line in [y_lo, y_hi]. Returns (best_y0, best_y1, best_white, best_total)
+    or (-1, -1, -1, -1) if no valid candidate.
+    """
     if y_hi <= y_lo + min_slope_px:
         return -1, -1, -1, -1
     cdef int max_slope_int = max(min_slope_px, <int>max_slope)
@@ -767,6 +813,10 @@ def search_vertical_in_area_cy(
     int half_width,
     int sample_max,
 ):
+    """
+    Search vertical sloping line in [x_lo, x_hi]. Returns (best_x0, best_x1, best_white, best_total)
+    or (-1, -1, -1, -1) if no valid candidate.
+    """
     if x_hi <= x_lo + min_slope_px:
         return -1, -1, -1, -1
     cdef int max_slope_int = max(min_slope_px, <int>max_slope)
@@ -857,6 +907,7 @@ def search_horizontal_in_area_integral_cy(
     int half_width,
     int sample_max,
 ):
+    """Same as search_horizontal_in_area_cy but uses integral image for band sum."""
     if y_hi <= y_lo + min_slope_px:
         return -1, -1, -1, -1
     cdef int max_slope_int = max(min_slope_px, <int>max_slope)
@@ -945,6 +996,7 @@ def search_vertical_in_area_integral_cy(
     int half_width,
     int sample_max,
 ):
+    """Same as search_vertical_in_area_cy but uses integral image for band sum."""
     if x_hi <= x_lo + min_slope_px:
         return -1, -1, -1, -1
     cdef int max_slope_int = max(min_slope_px, <int>max_slope)

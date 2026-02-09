@@ -79,7 +79,6 @@ def _manual_import_cy(name: str, base_dir: Path):
 _CY_MODULE_NAME = 'keypoints_cy_all'
 _CY_BASE_DIR = Path(__file__).parent
 _cy_module, _CY_LOAD_ERROR = _manual_import_cy(_CY_MODULE_NAME, _CY_BASE_DIR)
-_CY_MODULE_LOADED = _cy_module is not None
 _adding_four_points_cy_candidate_logged = False
 if _cy_module is not None:
     _seg_candidates_col_cy = getattr(_cy_module, 'segments_from_col_band', None)
@@ -101,8 +100,8 @@ else:
     _search_horizontal_in_area_integral_cy = None
     _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
-TV_KP_PROFILE: bool = True
-ONLY_FRAMES = list(range(2, 3))
+TV_KP_PROFILE: bool = False
+# ONLY_FRAMES = list(range(2, 3))
 PROCESSING_SCALE = 0.5
 REFINE_EXPECTED_MASKS_AT_BOUNDARIES = False
 STEP5_ENABLED = True
@@ -158,9 +157,6 @@ STEP8_EDGE_CACHE_MAX = 512
 STEP3_PATTERN_CACHE_MAX = 512
 _FRAME_CACHE: OrderedDict[int, np.ndarray] = OrderedDict()
 _FRAME_CACHE_MAX = 64
-_EVAL_KP_CACHE: OrderedDict[tuple, float] = OrderedDict()
-_EVAL_KP_CACHE_MAX = 512
-
 def _frame_cache_get(frame_store, frame_id: int) -> np.ndarray:
     frame_id = int(frame_id)
     if frame_id in _FRAME_CACHE:
@@ -174,21 +170,6 @@ def _frame_cache_get(frame_store, frame_id: int) -> np.ndarray:
 
 def _frame_cache_clear() -> None:
     _FRAME_CACHE.clear()
-
-def _make_eval_kp_cache_key(frame_id: int, frame_kps_tuples: list[tuple[float, float]]) -> tuple:
-    kps_rounded = tuple(((round(x, 4), round(y, 4)) for x, y in frame_kps_tuples))
-    return (int(frame_id), kps_rounded)
-
-def _eval_kp_cache_get(key: tuple) -> float | None:
-    if key in _EVAL_KP_CACHE:
-        _EVAL_KP_CACHE.move_to_end(key)
-        return _EVAL_KP_CACHE[key]
-    return None
-
-def _eval_kp_cache_put(key: tuple, score: float) -> None:
-    _EVAL_KP_CACHE[key] = score
-    while len(_EVAL_KP_CACHE) > _EVAL_KP_CACHE_MAX:
-        _EVAL_KP_CACHE.popitem(last=False)
 
 def _count_valid_keypoints(kps: list[list[float]] | None) -> int:
     if not kps:
@@ -230,13 +211,6 @@ else:
     _step3_filter_labels_cy = None
     _step3_conn_constraints_cy = None
     _step3_conn_label_constraints_cy = None
-
-def _step8_edges_cache_get(cache: OrderedDict[int, np.ndarray], key: int) -> np.ndarray | None:
-    val = cache.pop(key, None)
-    if val is None:
-        return None
-    cache[key] = val
-    return val
 
 def _step8_edges_cache_put(cache: OrderedDict[int, np.ndarray], key: int, value: np.ndarray, max_size: int) -> None:
     if max_size <= 0:
@@ -356,57 +330,6 @@ class _KPProfiler:
         tot = self.totals_ms.get('step5_fallback_add4', 0.0)
         avg = tot / frames
         print(f'[tv][kp_profile] {label} total_step5_fallback_add4_ms={tot:.2f} avg_step5_fallback_add4_ms={avg:.2f}')
-
-def _get_boundary_pixels(mask: np.ndarray) -> np.ndarray:
-    mask_bin = (mask > 0).astype(np.uint8) * 255
-    kernel = np.ones((3, 3), np.uint8)
-    eroded = cv2.erode(mask_bin, kernel)
-    dilated = cv2.dilate(mask_bin, kernel)
-    boundary_white = (mask_bin > 0) & (eroded == 0)
-    boundary_black = (mask_bin == 0) & (dilated > 0)
-    return (boundary_white | boundary_black).astype(np.uint8)
-
-def _get_refine_area(mask: np.ndarray, dilation_radius: int=1) -> np.ndarray:
-    boundary = _get_boundary_pixels(mask)
-    r = max(1, int(dilation_radius))
-    kernel = np.ones((2 * r + 1, 2 * r + 1), np.uint8)
-    return cv2.dilate(boundary, kernel)
-
-def _sample_template_at_points(template_gray: np.ndarray, pts_template: np.ndarray) -> np.ndarray:
-    th, tw = template_gray.shape
-    x = np.clip(pts_template[:, 0], 0.0, tw - 1.001)
-    y = np.clip(pts_template[:, 1], 0.0, th - 1.001)
-    x0 = np.floor(x).astype(np.int32)
-    y0 = np.floor(y).astype(np.int32)
-    x1 = np.minimum(x0 + 1, tw - 1)
-    y1 = np.minimum(y0 + 1, th - 1)
-    fx = x - x0
-    fy = y - y0
-    v00 = template_gray[y0, x0]
-    v10 = template_gray[y0, x1]
-    v01 = template_gray[y1, x0]
-    v11 = template_gray[y1, x1]
-    return ((1 - fx) * (1 - fy) * v00 + fx * (1 - fy) * v10 + (1 - fx) * fy * v01 + fx * fy * v11).astype(np.float32)
-
-def _refine_masks_at_boundaries(mask_ground: np.ndarray, mask_lines: np.ndarray, floor_markings_template: np.ndarray, template_keypoints: list[tuple[int, int]], frame_keypoints: list[tuple[float, float]], frame_width: int, frame_height: int, processing_scale: float=1.0) -> tuple[np.ndarray, np.ndarray]:
-    H = _homography_from_keypoints(template_keypoints, frame_keypoints)
-    H_inv = np.linalg.inv(H)
-    template_gray = cv2.cvtColor(floor_markings_template, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    th, tw = template_gray.shape
-    xs = np.arange(frame_width, dtype=np.float32)
-    ys = np.arange(frame_height, dtype=np.float32)
-    xx, yy = np.meshgrid(xs, ys)
-    pts_frame = np.column_stack((xx.ravel(), yy.ravel()))
-    pts_template = cv2.perspectiveTransform(pts_frame[:, None, :], H_inv)[:, 0, :]
-    out_of_bounds = (pts_template[:, 0] < 0) | (pts_template[:, 0] >= tw) | (pts_template[:, 1] < 0) | (pts_template[:, 1] >= th)
-    sampled = _sample_template_at_points(template_gray, pts_template)
-    sampled = np.where(out_of_bounds, 0.0, sampled)
-    out_ground = (sampled > 10).astype(np.uint8).reshape(frame_height, frame_width)
-    out_lines = (sampled > 200).astype(np.uint8).reshape(frame_height, frame_width)
-    out_of_bounds_2d = out_of_bounds.reshape(frame_height, frame_width)
-    out_ground[out_of_bounds_2d] = 0
-    out_lines[out_of_bounds_2d] = 0
-    return (out_ground, out_lines)
 
 def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[float]], frame_number: int, cached_edges: np.ndarray | None=None) -> dict[str, Any]:
     result: dict[str, Any] = {'frame_number': int(frame_number), 'has_h': False, 'p5': None, 'p29': None, 'Ey': None, 'Fy': None, 'best_aay': None, 'best_bby': None, 'best_white_rate': None, 'kkp5': None, 'kkp29': None}
@@ -1084,19 +1007,6 @@ def extract_masks_for_ground_and_lines(image: np.ndarray, debug_frame_id: int | 
     validate_mask_ground(mask=mask_ground_binary)
     validate_mask_lines(mask=mask_lines_binary, debug_frame_id=debug_frame_id)
     return (mask_ground_binary, mask_lines_binary)
-
-@functools.lru_cache(maxsize=1)
-def _get_template_ground_and_line_masks() -> tuple[np.ndarray, np.ndarray]:
-    template = challenge_template()
-    if template is None or template.size == 0:
-        h, w = (720, 1280)
-        return (np.zeros((h, w), dtype=np.uint8), np.zeros((h, w), dtype=np.uint8))
-    gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-    _, mask_ground = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-    _, mask_lines = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-    mask_ground_bin = (mask_ground > 0).astype(np.uint8)
-    mask_lines_bin = (mask_lines > 0).astype(np.uint8)
-    return (mask_ground_bin, mask_lines_bin)
 
 def _homography_from_keypoints(source_keypoints: list[tuple[int, int]], destination_keypoints: list[tuple[float, float]]) -> np.ndarray:
     filtered_src: list[tuple[int, int]] = []
@@ -3173,12 +3083,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     except Exception:
         pass
     _profile = False
-
-    def _mark(name: str) -> None:
-        pass
-
-    def _bump(name: str, n: int=1) -> None:
-        pass
     if frame_img is None:
         frame_img = frame_store.get_frame(frame_id)
     frame_height, frame_width = frame_img.shape[:2]
@@ -3203,13 +3107,11 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     else:
         edges = cached_edges
     binary_edges = (edges > 0).astype(np.uint8)
-    _mark('edge_done')
     ii = cv2.integral(binary_edges)
     row_prefix = (ii[1:, 1:] - ii[:-1, 1:]).astype(np.int32)
     col_prefix = (ii[1:, 1:] - ii[1:, :-1]).astype(np.int32)
     row_sums = row_prefix[:, -1] if frame_width > 0 else np.zeros((frame_height,), dtype=np.int32)
     col_sums = col_prefix[-1, :] if frame_height > 0 else np.zeros((frame_width,), dtype=np.int32)
-    _mark('integral_done')
     _edges_flat_cy = np.ascontiguousarray(binary_edges, dtype=np.uint8).ravel() if _search_horizontal_in_area_cy is not None or _search_vertical_in_area_cy is not None else None
     _integral_flat_cy = np.ascontiguousarray(ii, dtype=np.float64).ravel() if _search_horizontal_in_area_integral_cy is not None and _search_vertical_in_area_integral_cy is not None else None
 
@@ -3398,7 +3300,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             error_message = None
             status = 'rule-valid'
             try:
-                _bump('eval_calls', 1)
                 polygon_masks = None
                 mask_label = None
                 mask_debug_dir = None
@@ -3605,22 +3506,13 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 v_10_80_fut = ex.submit(_search_vertical_in_area, x_lo_10_80, x_hi_10_80, max_slope_w)
                 h_10_80 = h_10_80_fut.result()
                 h_20_90 = h_20_90_fut.result()
-                _mark('h_candidates_done')
                 v_20_90 = v_20_90_fut.result()
                 v_10_80 = v_10_80_fut.result()
-                _mark('v_candidates_done')
         else:
             h_10_80 = _search_horizontal_in_area(y_lo_10_80, y_hi_10_80, max_slope_h)
             h_20_90 = _search_horizontal_in_area(y_lo_20_90, y_hi_20_90, max_slope_h)
-            _mark('h_candidates_done')
             v_20_90 = _search_vertical_in_area(x_lo_20_90, x_hi_20_90, max_slope_w)
             v_10_80 = _search_vertical_in_area(x_lo_10_80, x_hi_10_80, max_slope_w)
-            _mark('v_candidates_done')
-        _bump('h_candidates', 2)
-        _bump('v_candidates', 2)
-    if frame_height <= 0 or frame_width <= 0:
-        _mark('h_candidates_done')
-        _mark('v_candidates_done')
     horizontal_candidates: list[dict[str, float]] = [c for c in [h_10_80, h_20_90] if c is not None]
     vertical_candidates: list[dict[str, float]] = [c for c in [v_20_90, v_10_80] if c is not None]
     best_line_for_transform: list[dict[str, float] | None] = [None] * 8
@@ -3641,7 +3533,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             x0, x1 = (float(v_10_80['x0']), float(v_10_80['x1']))
             best_line_for_transform[6] = {'xx1': W_REF - x0, 'xx2': W_REF - x1, 'type': 'v', '_x0': x0, '_x1': x1}
             best_line_for_transform[7] = {'xx1': W_REF - x1, 'xx2': W_REF - x0, 'type': 'v', '_x0': x0, '_x1': x1}
-    _mark('best_line_done')
     pair01913_poly_scores: dict[int, float] = {}
     pair13172425_poly_scores: dict[int, float] = {}
     PAIR01_VERTICAL_BAND_HW = 2
@@ -4117,10 +4008,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             if x_key not in seg_left_by_line:
                 seg_left_by_line[x_key] = _segments_left_raw(float(line['pos']))
                 seg_left_count += len(seg_left_by_line[x_key])
-    _bump('seg_down', seg_down_count)
-    _bump('seg_up', seg_up_count)
-    _bump('seg_right', seg_right_count)
-    _bump('seg_left', seg_left_count)
     t_seg_precompute_end = time.perf_counter() if _profile else 0.0
     seg_precompute_ms = float((t_seg_precompute_end - t_seg_precompute_start) * 1000.0)
 
@@ -4542,10 +4429,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             if kps is not None and status != 'rule-invalid':
                 scores_list[transform_idx] = (score, x_orig, y_orig, transform_idx, kps)
         t_transform_loop_end = time.perf_counter() if _profile else 0.0
-        _mark('t01_done')
-        _mark('t23_done')
-        _mark('t45_done')
-        _mark('t67_done')
         t_debug_end = time.perf_counter() if _profile else 0.0
         valid_scores = [(idx, score_data) for idx, score_data in enumerate(scores_list) if score_data is not None]
         best_score = 0.0
@@ -4646,7 +4529,6 @@ def main() -> None:
     step2_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     step3_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     step5_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
-    step7_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     best_entries: list[dict[str, Any]] = []
 
     def _push(target: list[dict[str, Any]] | None, value: dict[str, Any]) -> None:
@@ -5003,7 +4885,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
     step2_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     step3_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     step5_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
-    step7_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
     best_entries: list[dict[str, Any]] = []
 
     def _push(target: list[dict[str, Any]] | None, value: dict[str, Any]) -> None:
