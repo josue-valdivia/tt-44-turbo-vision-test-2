@@ -104,6 +104,12 @@ if _cy_module is not None:
     _normalize_keypoints_cy = getattr(_cy_module, "normalize_keypoints", None)
     _search_horizontal_in_area_cy = getattr(_cy_module, "search_horizontal_in_area_cy", None)
     _search_vertical_in_area_cy = getattr(_cy_module, "search_vertical_in_area_cy", None)
+    _search_horizontal_in_area_integral_cy = getattr(
+        _cy_module, "search_horizontal_in_area_integral_cy", None
+    )
+    _search_vertical_in_area_integral_cy = getattr(
+        _cy_module, "search_vertical_in_area_integral_cy", None
+    )
     _sloping_line_white_count_cy = getattr(_cy_module, "sloping_line_white_count_cy", None)
 else:
     _seg_candidates_col_cy = None
@@ -112,12 +118,14 @@ else:
     _normalize_keypoints_cy = None
     _search_horizontal_in_area_cy = None
     _search_vertical_in_area_cy = None
+    _search_horizontal_in_area_integral_cy = None
+    _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
 DEBUG_FLAG = False
-TV_KP_PROFILE: bool = True
-ONLY_FRAMES = list(range(2, 3))
+TV_KP_PROFILE: bool = False
+# ONLY_FRAMES = list(range(2, 3))
 # Process frames at reduced resolution for speed (segment counts and mask work scale with area)
 PROCESSING_SCALE = 0.5  # 1.0 = full size; 0.5 = half width/height
 STEP5_ENABLED = True           # score the ordered keypoints
@@ -617,7 +625,7 @@ TV_KP_PROFILE_EVERY: int = 1  # print per-frame stats every N frames
 # This preserves the exact same candidate selection per transform (we still pick the first rule-valid pair),
 # but can reduce wall-time on multi-core CPUs.
 TV_AF_EVAL_PARALLEL: bool = True
-TV_AF_EVAL_MAX_WORKERS: int = 4
+TV_AF_EVAL_MAX_WORKERS: int = 8
 
 
 def _kp_prof_enabled() -> bool:
@@ -1207,6 +1215,7 @@ def _step4_9_select_h_and_keypoints(
                 floor_markings_template=template_image,
                 frame_number=frame_number,
                 cached_edges=cached_edges,
+                processing_scale=PROCESSING_SCALE,
             )
         except Exception:
             return 0.0
@@ -1315,9 +1324,16 @@ def _step4_9_select_h_and_keypoints(
                     kkp43_strs.append(f"kkp20=({float(a):.2f},{float(b):.2f})")
         print(f"[DEBUG] Frame {frame_number} - Step 4.9: kkps from 4.3: {', '.join(kkp43_strs) if kkp43_strs else 'none'}")
 
-    s1 = _score_h(H1)
-    s2 = _score_h(H2)
-    s3 = _score_h(H3)
+    if TV_AF_EVAL_PARALLEL and not DEBUG_FLAG:
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f1 = ex.submit(_score_h, H1)
+            f2 = ex.submit(_score_h, H2)
+            f3 = ex.submit(_score_h, H3)
+            s1, s2, s3 = f1.result(), f2.result(), f3.result()
+    else:
+        s1 = _score_h(H1)
+        s2 = _score_h(H2)
+        s3 = _score_h(H3)
     best_score = max(s1, s2, s3)
 
     if DEBUG_FLAG:
@@ -6694,6 +6710,15 @@ def adding_four_points(
         if (_search_horizontal_in_area_cy is not None or _search_vertical_in_area_cy is not None)
         else None
     )
+    # Integral image flat for integral-based Cython search (faster band sum).
+    _integral_flat_cy = (
+        np.ascontiguousarray(ii, dtype=np.float64).ravel()
+        if (
+            _search_horizontal_in_area_integral_cy is not None
+            and _search_vertical_in_area_integral_cy is not None
+        )
+        else None
+    )
 
     def _sum_rect(y0: int, y1: int, x0: int, x1: int) -> int:
         # Sum of binary_edges[y0:y1, x0:x1] with y1/x1 as exclusive bounds.
@@ -7030,6 +7055,7 @@ def adding_four_points(
                         "transform_idx": transform_idx,
                         "pair_indices": list(group.get("indices", [])),
                     },
+                    processing_scale=PROCESSING_SCALE,
                 )
                 if _profile:
                     _t_eval_total += time.perf_counter() - _t_eval0
@@ -7069,7 +7095,6 @@ def adding_four_points(
             if (
                 TV_AF_EVAL_PARALLEL
                 and (not DEBUG_FLAG)
-                and (not _profile)
                 and len(candidates) > 1
             ):
                 max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
@@ -7132,7 +7157,7 @@ def adding_four_points(
     # t0,t1: horizontal line in 10~80% height; t2,t3: horizontal in 20~90% height;
     # t4,t5: vertical line in 20~90% width; t6,t7: vertical in 10~80% width.
     # Constraint: 1 < |yy1-yy2| < H/10 (horizontal) or 1 < |x1-x0| < W/10 (vertical).
-    COARSE_STEP = 8
+    COARSE_STEP = 12
     REFINE_STEP = 2
     REFINE_RADIUS = 4
     MIN_SLOPE_PX = 2   # strictly > 1
@@ -7141,7 +7166,22 @@ def adding_four_points(
         """Search horizontal sloping line yy1-yy2 in [y_lo, y_hi] with 1 < |yy1-yy2| < max_slope. Return best candidate or None."""
         if y_hi <= y_lo + MIN_SLOPE_PX:
             return None
-        if _search_horizontal_in_area_cy is not None and _edges_flat_cy is not None:
+        if _search_horizontal_in_area_integral_cy is not None and _integral_flat_cy is not None:
+            by0, by1, bwhite, btotal = _search_horizontal_in_area_integral_cy(
+                _integral_flat_cy,
+                frame_width,
+                frame_height,
+                y_lo,
+                y_hi,
+                max_slope,
+                COARSE_STEP,
+                REFINE_RADIUS,
+                REFINE_STEP,
+                MIN_SLOPE_PX,
+                SLOPING_LINE_HALF_WIDTH,
+                SLOPING_LINE_SAMPLE_MAX,
+            )
+        elif _search_horizontal_in_area_cy is not None and _edges_flat_cy is not None:
             by0, by1, bwhite, btotal = _search_horizontal_in_area_cy(
                 _edges_flat_cy,
                 frame_width,
@@ -7156,16 +7196,23 @@ def adding_four_points(
                 SLOPING_LINE_HALF_WIDTH,
                 SLOPING_LINE_SAMPLE_MAX,
             )
-            if by0 >= 0 and btotal > 0:
-                mid_y = (by0 + by1) / 2.0
-                return {
-                    "pos": mid_y,
-                    "start": float(by0),
-                    "count": float(bwhite),
-                    "rate": bwhite / btotal,
-                    "y0": float(by0),
-                    "y1": float(by1),
-                }
+        else:
+            by0, by1, bwhite, btotal = -1, -1, -1, -1
+        if by0 >= 0 and btotal > 0:
+            mid_y = (by0 + by1) / 2.0
+            return {
+                "pos": mid_y,
+                "start": float(by0),
+                "count": float(bwhite),
+                "rate": bwhite / btotal,
+                "y0": float(by0),
+                "y1": float(by1),
+            }
+        used_cython = (
+            (_search_horizontal_in_area_integral_cy is not None and _integral_flat_cy is not None)
+            or (_search_horizontal_in_area_cy is not None and _edges_flat_cy is not None)
+        )
+        if used_cython:
             return None
         best_count = -1
         best_y0, best_y1 = y_lo, y_lo + MIN_SLOPE_PX
@@ -7212,7 +7259,22 @@ def adding_four_points(
         """Search vertical sloping line x1-x2 in [x_lo, x_hi] with 1 < |x1-x0| < max_slope. Return best candidate or None."""
         if x_hi <= x_lo + MIN_SLOPE_PX:
             return None
-        if _search_vertical_in_area_cy is not None and _edges_flat_cy is not None:
+        if _search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None:
+            bx0, bx1, bwhite, btotal = _search_vertical_in_area_integral_cy(
+                _integral_flat_cy,
+                frame_width,
+                frame_height,
+                x_lo,
+                x_hi,
+                max_slope,
+                COARSE_STEP,
+                REFINE_RADIUS,
+                REFINE_STEP,
+                MIN_SLOPE_PX,
+                SLOPING_LINE_HALF_WIDTH,
+                SLOPING_LINE_SAMPLE_MAX,
+            )
+        elif _search_vertical_in_area_cy is not None and _edges_flat_cy is not None:
             bx0, bx1, bwhite, btotal = _search_vertical_in_area_cy(
                 _edges_flat_cy,
                 frame_width,
@@ -7227,16 +7289,23 @@ def adding_four_points(
                 SLOPING_LINE_HALF_WIDTH,
                 SLOPING_LINE_SAMPLE_MAX,
             )
-            if bx0 >= 0 and btotal > 0:
-                mid_x = (bx0 + bx1) / 2.0
-                return {
-                    "pos": mid_x,
-                    "start": float(bx0),
-                    "count": float(bwhite),
-                    "rate": bwhite / btotal,
-                    "x0": float(bx0),
-                    "x1": float(bx1),
-                }
+        else:
+            bx0, bx1, bwhite, btotal = -1, -1, -1, -1
+        if bx0 >= 0 and btotal > 0:
+            mid_x = (bx0 + bx1) / 2.0
+            return {
+                "pos": mid_x,
+                "start": float(bx0),
+                "count": float(bwhite),
+                "rate": bwhite / btotal,
+                "x0": float(bx0),
+                "x1": float(bx1),
+            }
+        used_cython = (
+            (_search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None)
+            or (_search_vertical_in_area_cy is not None and _edges_flat_cy is not None)
+        )
+        if used_cython:
             return None
         best_count = -1
         best_x0, best_x1 = x_lo, x_lo + MIN_SLOPE_PX
@@ -7291,10 +7360,12 @@ def adding_four_points(
     v_10_80: dict[str, float] | None = None
     if DEBUG_FLAG:
         print(f"[DEBUG] Frame {frame_id} - adding_four_points: Searching for 10px sloping lines in overall areas")
-    # One-time log: Cython vs Python for horizontal/vertical candidate search
+    # One-time log: Cython integral vs Cython edges vs Python for horizontal/vertical candidate search
     global _adding_four_points_cy_candidate_logged
     if not _adding_four_points_cy_candidate_logged:
-        if _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
+        if _search_horizontal_in_area_integral_cy is not None and _search_vertical_in_area_integral_cy is not None and _integral_flat_cy is not None:
+            print("[tv][adding_four_points] Sloping line candidate search: Cython integral (search_*_in_area_integral_cy)")
+        elif _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
             print("[tv][adding_four_points] Sloping line candidate search: Cython (search_horizontal_in_area_cy / search_vertical_in_area_cy)")
         else:
             print("[tv][adding_four_points] Sloping line candidate search: Python fallback (Cython extension not loaded or missing search_*_in_area_cy)")
@@ -7308,8 +7379,8 @@ def adding_four_points(
         x_hi_10_80 = int(frame_width * 0.80)
         x_lo_20_90 = int(frame_width * 0.20)
         x_hi_20_90 = int(frame_width * 0.90)
-        if TV_AF_EVAL_PARALLEL and not DEBUG_FLAG and not _profile:
-            with ThreadPoolExecutor(max_workers=2) as ex:
+        if TV_AF_EVAL_PARALLEL and not DEBUG_FLAG:
+            with ThreadPoolExecutor(max_workers=TV_AF_EVAL_MAX_WORKERS) as ex:
                 h_10_80_fut = ex.submit(_search_horizontal_in_area, y_lo_10_80, y_hi_10_80, max_slope_h)
                 h_20_90_fut = ex.submit(_search_horizontal_in_area, y_lo_20_90, y_hi_20_90, max_slope_h)
                 v_20_90_fut = ex.submit(_search_vertical_in_area, x_lo_20_90, x_hi_20_90, max_slope_w)
@@ -7920,43 +7991,41 @@ def adding_four_points(
         except Exception:
             used_cy_precompute = False
 
-    if (not used_cy_precompute) and TV_AF_EVAL_PARALLEL and (not _profile):
+    if (not used_cy_precompute) and TV_AF_EVAL_PARALLEL:
         max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            h_futures = {
+            all_futures = {
                 ex.submit(_segments_down_raw, float(line["pos"])): ("down", int(line["pos"]))
                 for line in horizontal_candidates
             }
-            h_futures.update(
+            all_futures.update(
                 {
                     ex.submit(_segments_up_raw, float(line["pos"])): ("up", int(line["pos"]))
                     for line in horizontal_candidates
                 }
             )
-            for fut in as_completed(h_futures):
-                kind, key = h_futures[fut]
-                segments = fut.result()
-                if kind == "down":
-                    seg_down_by_line[key] = segments
-                    seg_down_count += len(segments)
-                else:
-                    seg_up_by_line[key] = segments
-                    seg_up_count += len(segments)
-
-            v_futures = {
-                ex.submit(_segments_right_raw, float(line["pos"])): ("right", int(line["pos"]))
-                for line in vertical_candidates
-            }
-            v_futures.update(
+            all_futures.update(
+                {
+                    ex.submit(_segments_right_raw, float(line["pos"])): ("right", int(line["pos"]))
+                    for line in vertical_candidates
+                }
+            )
+            all_futures.update(
                 {
                     ex.submit(_segments_left_raw, float(line["pos"])): ("left", int(line["pos"]))
                     for line in vertical_candidates
                 }
             )
-            for fut in as_completed(v_futures):
-                kind, key = v_futures[fut]
+            for fut in as_completed(all_futures):
+                kind, key = all_futures[fut]
                 segments = fut.result()
-                if kind == "right":
+                if kind == "down":
+                    seg_down_by_line[key] = segments
+                    seg_down_count += len(segments)
+                elif kind == "up":
+                    seg_up_by_line[key] = segments
+                    seg_up_count += len(segments)
+                elif kind == "right":
                     seg_right_by_line[key] = segments
                     seg_right_count += len(segments)
                 else:
@@ -8004,7 +8073,7 @@ def adding_four_points(
     )
     # endregion
 
-    def _evaluate_group(group):
+    def _evaluate_group(group, shared_executor=None):
         # region agent log
         _dbglog(
             "H1",
@@ -8051,10 +8120,11 @@ def adding_four_points(
                 best_tf_idx = -1
                 scores_list_tpl: list[tuple[float, float, float, int, list[tuple[float, float]]] | None] = [None] * 8
                 mask_debug_dir = Path("debug_frames") / "adding_four_points" / "template_projected_masks" if DEBUG_FLAG else None
-                for tf_idx in range(8):
+
+                def _eval_one_tf(tf_idx: int):
                     frame_kps = _kps_fn(tf_idx)
                     if frame_kps is None:
-                        continue
+                        return tf_idx, None
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(_tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
@@ -8076,11 +8146,28 @@ def adding_four_points(
                         )
                     except Exception:
                         score = 0.0
-                    scores_list_tpl[tf_idx] = (score, 0.0, 0.0, tf_idx, test_keypoints)
-                    if score > best_score:
-                        best_score = score
-                        best_kps = test_keypoints
-                        best_tf_idx = tf_idx
+                    return tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints)
+
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                    futures = {shared_executor.submit(_eval_one_tf, i): i for i in range(8)}
+                    for fut in as_completed(futures):
+                        tf_idx, res = fut.result()
+                        if res is not None:
+                            scores_list_tpl[tf_idx] = res
+                            sc = res[0]
+                            if sc > best_score:
+                                best_score = sc
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
+                else:
+                    for tf_idx in range(8):
+                        _ti, res = _eval_one_tf(tf_idx)
+                        if res is not None:
+                            scores_list_tpl[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 tpl_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 tpl_score_ms = (t_group_end - t_tpl_start) * 1000.0 if _profile else 0.0
@@ -8131,10 +8218,11 @@ def adding_four_points(
                 best_tf_idx = -1
                 scores_list_poly = [None] * 8
                 pair01913_poly_scores.clear()
-                for tf_idx in range(8):
+
+                def _eval_tf_poly01913(tf_idx: int):
                     frame_kps = _pair01913_kps_for_transform(tf_idx)
                     if frame_kps is None:
-                        continue
+                        return tf_idx, None
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
@@ -8152,15 +8240,33 @@ def adding_four_points(
                             mask_debug_dir=None,
                             score_only=False,
                             log_context={"transform_idx": tf_idx, "pair_indices": tpl_indices},
+                            processing_scale=PROCESSING_SCALE,
                         )
                     except Exception:
                         score = 0.0
-                    pair01913_poly_scores[tf_idx] = float(score)
-                    scores_list_poly[tf_idx] = (score, 0.0, 0.0, tf_idx, test_keypoints)
-                    if score > best_score:
-                        best_score = score
-                        best_kps = test_keypoints
-                        best_tf_idx = tf_idx
+                    return tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints)
+
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                    futures = {shared_executor.submit(_eval_tf_poly01913, i): i for i in range(8)}
+                    for fut in as_completed(futures):
+                        tf_idx, res = fut.result()
+                        if res is not None:
+                            pair01913_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
+                else:
+                    for tf_idx in range(8):
+                        _ti, res = _eval_tf_poly01913(tf_idx)
+                        if res is not None:
+                            pair01913_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 poly_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 poly_score_ms = (t_group_end - t_poly_start) * 1000.0 if _profile else 0.0
@@ -8195,10 +8301,11 @@ def adding_four_points(
                 best_tf_idx = -1
                 scores_list_poly: list[tuple[float, float, float, int, list[tuple[float, float]]] | None] = [None] * 8
                 pair13172425_poly_scores.clear()
-                for tf_idx in range(8):
+
+                def _eval_tf_poly13172425(tf_idx: int):
                     frame_kps = _pair13172425_kps_for_transform(tf_idx)
                     if frame_kps is None:
-                        continue
+                        return tf_idx, None
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
@@ -8216,15 +8323,33 @@ def adding_four_points(
                             mask_debug_dir=None,
                             score_only=False,
                             log_context={"transform_idx": tf_idx, "pair_indices": tpl_indices},
+                            processing_scale=PROCESSING_SCALE,
                         )
                     except Exception:
                         score = 0.0
-                    pair13172425_poly_scores[tf_idx] = float(score)
-                    scores_list_poly[tf_idx] = (score, 0.0, 0.0, tf_idx, test_keypoints)
-                    if score > best_score:
-                        best_score = score
-                        best_kps = test_keypoints
-                        best_tf_idx = tf_idx
+                    return tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints)
+
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                    futures = {shared_executor.submit(_eval_tf_poly13172425, i): i for i in range(8)}
+                    for fut in as_completed(futures):
+                        tf_idx, res = fut.result()
+                        if res is not None:
+                            pair13172425_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
+                else:
+                    for tf_idx in range(8):
+                        _ti, res = _eval_tf_poly13172425(tf_idx)
+                        if res is not None:
+                            pair13172425_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 poly_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 poly_score_ms = (t_group_end - t_poly_start) * 1000.0 if _profile else 0.0
@@ -8259,10 +8384,11 @@ def adding_four_points(
                 best_tf_idx = -1
                 scores_list_poly = [None] * 8
                 pair15161920_poly_scores.clear()
-                for tf_idx in range(8):
+
+                def _eval_tf_poly15161920(tf_idx: int):
                     frame_kps = _pair15161920_kps_for_transform(tf_idx)
                     if frame_kps is None:
-                        continue
+                        return tf_idx, None
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
@@ -8280,15 +8406,33 @@ def adding_four_points(
                             mask_debug_dir=None,
                             score_only=False,
                             log_context={"transform_idx": tf_idx, "pair_indices": tpl_indices},
+                            processing_scale=PROCESSING_SCALE,
                         )
                     except Exception:
                         score = 0.0
-                    pair15161920_poly_scores[tf_idx] = float(score)
-                    scores_list_poly[tf_idx] = (score, 0.0, 0.0, tf_idx, test_keypoints)
-                    if score > best_score:
-                        best_score = score
-                        best_kps = test_keypoints
-                        best_tf_idx = tf_idx
+                    return tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints)
+
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                    futures = {shared_executor.submit(_eval_tf_poly15161920, i): i for i in range(8)}
+                    for fut in as_completed(futures):
+                        tf_idx, res = fut.result()
+                        if res is not None:
+                            pair15161920_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
+                else:
+                    for tf_idx in range(8):
+                        _ti, res = _eval_tf_poly15161920(tf_idx)
+                        if res is not None:
+                            pair15161920_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 poly_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 poly_score_ms = (t_group_end - t_poly_start) * 1000.0 if _profile else 0.0
@@ -8323,10 +8467,11 @@ def adding_four_points(
                 best_tf_idx = -1
                 scores_list_poly = [None] * 8
                 pair2223252627_poly_scores.clear()
-                for tf_idx in range(8):
+
+                def _eval_tf_poly2223252627(tf_idx: int):
                     frame_kps = _pair2223252627_kps_for_transform(tf_idx)
                     if frame_kps is None:
-                        continue
+                        return tf_idx, None
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
@@ -8344,15 +8489,33 @@ def adding_four_points(
                             mask_debug_dir=None,
                             score_only=False,
                             log_context={"transform_idx": tf_idx, "pair_indices": tpl_indices},
+                            processing_scale=PROCESSING_SCALE,
                         )
                     except Exception:
                         score = 0.0
-                    pair2223252627_poly_scores[tf_idx] = float(score)
-                    scores_list_poly[tf_idx] = (score, 0.0, 0.0, tf_idx, test_keypoints)
-                    if score > best_score:
-                        best_score = score
-                        best_kps = test_keypoints
-                        best_tf_idx = tf_idx
+                    return tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints)
+
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                    futures = {shared_executor.submit(_eval_tf_poly2223252627, i): i for i in range(8)}
+                    for fut in as_completed(futures):
+                        tf_idx, res = fut.result()
+                        if res is not None:
+                            pair2223252627_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
+                else:
+                    for tf_idx in range(8):
+                        _ti, res = _eval_tf_poly2223252627(tf_idx)
+                        if res is not None:
+                            pair2223252627_poly_scores[tf_idx] = float(res[0])
+                            scores_list_poly[tf_idx] = res
+                            if res[0] > best_score:
+                                best_score = res[0]
+                                best_kps = res[4]
+                                best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 poly_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 poly_score_ms = (t_group_end - t_poly_start) * 1000.0 if _profile else 0.0
@@ -8974,13 +9137,13 @@ def adding_four_points(
     if (
         TV_AF_EVAL_PARALLEL
         and (not DEBUG_FLAG)
-        and (not _profile)
         and len(group_defs) > 1
     ):
+        # Do NOT cap by len(group_defs): group tasks submit transform tasks to same pool and block.
+        # If all workers run groups, none are free to run transforms -> deadlock. Need extra workers.
         max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
-        max_workers = min(max_workers, len(group_defs))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = {ex.submit(_evaluate_group, group): idx for idx, group in enumerate(group_defs)}
+            futures = {ex.submit(_evaluate_group, group, ex): idx for idx, group in enumerate(group_defs)}
             ordered_results: list[dict[str, Any] | None] = [None] * len(group_defs)
             for fut in as_completed(futures):
                 idx = futures[fut]

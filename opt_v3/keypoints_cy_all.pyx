@@ -8,7 +8,7 @@ import numpy as np
 cimport numpy as np
 cimport numpy as cnp
 import cython
-from libc.math cimport sqrt, floor
+from libc.math cimport sqrt, floor, ceil, fmin, fmax
 
 np.import_array()
 
@@ -641,6 +641,63 @@ def sloping_line_white_count_cy(
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
+def sloping_line_white_count_integral_cy(
+    np.ndarray[np.float64_t, ndim=1] integral_flat,
+    int w,
+    int h,
+    double ax,
+    double ay,
+    double bx,
+    double by,
+    int half_width,
+    int sample_max,
+):
+    """
+    Count white pixels in (2*half_width+1)-px band along (ax,ay)->(bx,by) using integral image.
+    integral_flat: flattened cv2.integral(edges), shape (h+1)*(w+1), stride = w+1.
+    Returns (white_count, total_pixel_count_approx). Band approximated by axis-aligned rectangles.
+    """
+    cdef double L = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
+    if L < 1.0:
+        return 0, 0
+    cdef int n_steps = min(max(1, <int>L + 1), sample_max)
+    cdef double perp_x = -(by - ay) / L
+    cdef double perp_y = (bx - ax) / L
+    cdef int stride = w + 1
+    cdef double t, px, py
+    cdef double cx_lo, cx_hi, cy_lo, cy_hi
+    cdef int x_min, x_max, y_min, y_max
+    cdef int i
+    cdef double rect_sum
+    cdef long long white = 0
+    cdef long long total = 0
+    for i in range(n_steps):
+        t = (<double>i) / (<double>max(1, n_steps - 1))
+        px = ax + t * (bx - ax)
+        py = ay + t * (by - ay)
+        cx_lo = fmin(px - <double>half_width * perp_x, px + <double>half_width * perp_x)
+        cx_hi = fmax(px - <double>half_width * perp_x, px + <double>half_width * perp_x)
+        cy_lo = fmin(py - <double>half_width * perp_y, py + <double>half_width * perp_y)
+        cy_hi = fmax(py - <double>half_width * perp_y, py + <double>half_width * perp_y)
+        x_min = max(0, <int>floor(cx_lo))
+        x_max = min(w - 1, <int>ceil(cx_hi))
+        y_min = max(0, <int>floor(cy_lo))
+        y_max = min(h - 1, <int>ceil(cy_hi))
+        if x_max < x_min or y_max < y_min:
+            continue
+        rect_sum = (
+            integral_flat[(y_max + 1) * stride + (x_max + 1)]
+            - integral_flat[y_min * stride + (x_max + 1)]
+            - integral_flat[(y_max + 1) * stride + x_min]
+            + integral_flat[y_min * stride + x_min]
+        )
+        white += <long long>rect_sum
+        total += <long long>(x_max - x_min + 1) * (y_max - y_min + 1)
+    return int(white), int(total)
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def search_horizontal_in_area_cy(
     np.ndarray[np.uint8_t, ndim=1] edges_flat,
     int w,
@@ -816,6 +873,184 @@ def search_vertical_in_area_cy(
             if abs(x1 - x0) >= min_slope_px and abs(x1 - x0) <= max_slope_int:
                 white, total = sloping_line_white_count_cy(
                     edges_flat, w, h, <double>x0, 0.0, <double>x1, by,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_x0, best_x1 = x0, x1
+                    best_white, best_total = white, total
+            x1 += refine_step
+        x0 += refine_step
+    return best_x0, best_x1, best_white, best_total
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def search_horizontal_in_area_integral_cy(
+    np.ndarray[np.float64_t, ndim=1] integral_flat,
+    int w,
+    int h,
+    int y_lo,
+    int y_hi,
+    double max_slope,
+    int coarse_step,
+    int refine_radius,
+    int refine_step,
+    int min_slope_px,
+    int half_width,
+    int sample_max,
+):
+    """Same as search_horizontal_in_area_cy but uses integral image for band sum."""
+    if y_hi <= y_lo + min_slope_px:
+        return -1, -1, -1, -1
+    cdef int max_slope_int = max(min_slope_px, <int>max_slope)
+    cdef int best_count = -1
+    cdef int best_y0 = y_lo, best_y1 = y_lo + min_slope_px
+    cdef int best_white = 0, best_total = 0
+    cdef int y0, y1, white, total
+    cdef double bx = <double>(w - 1)
+    y0 = y_lo
+    while y0 <= y_hi:
+        y1 = y_lo
+        while y1 <= y_hi:
+            if abs(y1 - y0) >= min_slope_px and abs(y1 - y0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, 0.0, <double>y0, bx, <double>y1,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_y0, best_y1 = y0, y1
+                    best_white, best_total = white, total
+            y1 += coarse_step
+        if y1 - coarse_step != y_hi and y1 <= y_hi + coarse_step:
+            y1 = y_hi
+            if abs(y1 - y0) >= min_slope_px and abs(y1 - y0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, 0.0, <double>y0, bx, <double>y1,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_y0, best_y1 = y0, y1
+                    best_white, best_total = white, total
+        y0 += coarse_step
+    if y0 - coarse_step != y_hi and y0 <= y_hi + coarse_step:
+        y0 = y_hi
+        y1 = y_lo
+        while y1 <= y_hi:
+            if abs(y1 - y0) >= min_slope_px and abs(y1 - y0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, 0.0, <double>y0, bx, <double>y1,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_y0, best_y1 = y0, y1
+                    best_white, best_total = white, total
+            y1 += coarse_step
+    if best_count < 0:
+        return -1, -1, -1, -1
+    cdef int y0_ref_min = max(y_lo, best_y0 - refine_radius)
+    cdef int y0_ref_max = min(y_hi, best_y0 + refine_radius)
+    cdef int y1_ref_min = max(y_lo, best_y1 - refine_radius)
+    cdef int y1_ref_max = min(y_hi, best_y1 + refine_radius)
+    y0 = y0_ref_min
+    while y0 <= y0_ref_max:
+        y1 = y1_ref_min
+        while y1 <= y1_ref_max:
+            if abs(y1 - y0) >= min_slope_px and abs(y1 - y0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, 0.0, <double>y0, bx, <double>y1,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_y0, best_y1 = y0, y1
+                    best_white, best_total = white, total
+            y1 += refine_step
+        y0 += refine_step
+    return best_y0, best_y1, best_white, best_total
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def search_vertical_in_area_integral_cy(
+    np.ndarray[np.float64_t, ndim=1] integral_flat,
+    int w,
+    int h,
+    int x_lo,
+    int x_hi,
+    double max_slope,
+    int coarse_step,
+    int refine_radius,
+    int refine_step,
+    int min_slope_px,
+    int half_width,
+    int sample_max,
+):
+    """Same as search_vertical_in_area_cy but uses integral image for band sum."""
+    if x_hi <= x_lo + min_slope_px:
+        return -1, -1, -1, -1
+    cdef int max_slope_int = max(min_slope_px, <int>max_slope)
+    cdef int best_count = -1
+    cdef int best_x0 = x_lo, best_x1 = x_lo + min_slope_px
+    cdef int best_white = 0, best_total = 0
+    cdef int x0, x1, white, total
+    cdef double by = <double>(h - 1)
+    x0 = x_lo
+    while x0 <= x_hi:
+        x1 = x_lo
+        while x1 <= x_hi:
+            if abs(x1 - x0) >= min_slope_px and abs(x1 - x0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, <double>x0, 0.0, <double>x1, by,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_x0, best_x1 = x0, x1
+                    best_white, best_total = white, total
+            x1 += coarse_step
+        if x1 - coarse_step != x_hi and x1 <= x_hi + coarse_step:
+            x1 = x_hi
+            if abs(x1 - x0) >= min_slope_px and abs(x1 - x0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, <double>x0, 0.0, <double>x1, by,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_x0, best_x1 = x0, x1
+                    best_white, best_total = white, total
+        x0 += coarse_step
+    if x0 - coarse_step != x_hi and x0 <= x_hi + coarse_step:
+        x0 = x_hi
+        x1 = x_lo
+        while x1 <= x_hi:
+            if abs(x1 - x0) >= min_slope_px and abs(x1 - x0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, <double>x0, 0.0, <double>x1, by,
+                    half_width, sample_max,
+                )
+                if total > 0 and white > best_count:
+                    best_count = white
+                    best_x0, best_x1 = x0, x1
+                    best_white, best_total = white, total
+            x1 += coarse_step
+    if best_count < 0:
+        return -1, -1, -1, -1
+    cdef int x0_ref_min = max(x_lo, best_x0 - refine_radius)
+    cdef int x0_ref_max = min(x_hi, best_x0 + refine_radius)
+    cdef int x1_ref_min = max(x_lo, best_x1 - refine_radius)
+    cdef int x1_ref_max = min(x_hi, best_x1 + refine_radius)
+    x0 = x0_ref_min
+    while x0 <= x0_ref_max:
+        x1 = x1_ref_min
+        while x1 <= x1_ref_max:
+            if abs(x1 - x0) >= min_slope_px and abs(x1 - x0) <= max_slope_int:
+                white, total = sloping_line_white_count_integral_cy(
+                    integral_flat, w, h, <double>x0, 0.0, <double>x1, by,
                     half_width, sample_max,
                 )
                 if total > 0 and white > best_count:
