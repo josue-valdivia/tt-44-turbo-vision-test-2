@@ -361,45 +361,15 @@ class _KPProfiler:
         self._add('frame_total', total_ms)
         for k, v in parts_ms.items():
             self._add(k, v)
-        if self._every > 0 and self._frame_count % self._every == 0:
-            keys = ['step1', 'step2', 'step3', 'step4', 'step4_1', 'step4_3', 'step4_9', 'step5_validate', 'step5_score_compare', 'step5_fallback_add4', 'step6_fill', 'step7_interpolate', 'step8_adjust']
-            sum_steps = sum((parts_ms.get(k, 0.0) for k in keys))
-            other_ms = total_ms - sum_steps
-            seg = ' '.join([f'{k}_ms={parts_ms.get(k, 0.0):.2f}' for k in keys])
-            seg = f'{seg} other_ms={other_ms:.2f}'
-            extra_keys = sorted([k for k in parts_ms.keys() if k.startswith('step3_') and k not in ('step3',) or (k.startswith('step4_1_') and k not in ('step4_1',)) or (k.startswith('step4_3_') and k not in ('step4_3',)) or (k.startswith('step4_9_') and k not in ('step4_9',)) or (k.startswith('other_') and k != 'other')])
-            extra = ''
-            if extra_keys:
-                extras_fmt: list[str] = []
-                for k in extra_keys:
-                    v = parts_ms.get(k, 0.0)
-                    if k.endswith('_n'):
-                        extras_fmt.append(f'{k}={int(v)}')
-                    else:
-                        extras_fmt.append(f'{k}_ms={float(v):.2f}')
-                extra = ' ' + ' '.join(extras_fmt)
-            print(f'[tv][kp_profile] frame={frame_id} total_ms={total_ms:.2f} {seg}{extra}')
-
     def summary(self, *, label: str) -> None:
         if not self.enabled:
             return
         elapsed_ms = (time.perf_counter() - self._t0) * 1000.0
         frames = max(1, self._frame_count)
-        print(f'[tv][kp_profile] {label} frames={self._frame_count} elapsed_ms={elapsed_ms:.2f} avg_frame_ms={self.totals_ms.get('frame_total', 0.0) / frames:.2f}')
-        keys = ['step1', 'step2', 'step3', 'step4', 'step4_1', 'step4_3', 'step4_9', 'step5_validate', 'step5_score_compare', 'step5_fallback_add4', 'step6_fill', 'step7_interpolate', 'step8_adjust']
-        for k in keys:
-            tot = self.totals_ms.get(k, 0.0)
-            avg = tot / frames
-            print(f'[tv][kp_profile] {label} total_{k}_ms={tot:.2f} avg_{k}_ms={avg:.2f}')
-        sum_steps = sum((self.totals_ms.get(k, 0.0) for k in keys))
-        frame_total = self.totals_ms.get('frame_total', 0.0)
-        other_tot = frame_total - sum_steps
-        other_avg = other_tot / frames
-        print(f'[tv][kp_profile] {label} total_other_ms={other_tot:.2f} avg_other_ms={other_avg:.2f}')
-        for ok in ('other_load', 'other_setup', 'other_similar', 'other_result'):
-            ot = self.totals_ms.get(ok, 0.0)
-            if ot != 0.0:
-                print(f'[tv][kp_profile] {label} total_{ok}_ms={ot:.2f} avg_{ok}_ms={ot / frames:.2f}')
+        print(f'[tv][kp_profile] {label} frames={self._frame_count} elapsed_ms={elapsed_ms:.2f} avg_frame_ms={self.totals_ms.get("frame_total", 0.0) / frames:.2f}')
+        tot = self.totals_ms.get('step5_fallback_add4', 0.0)
+        avg = tot / frames
+        print(f'[tv][kp_profile] {label} total_step5_fallback_add4_ms={tot:.2f} avg_step5_fallback_add4_ms={avg:.2f}')
 
 def _get_boundary_pixels(mask: np.ndarray) -> np.ndarray:
     mask_bin = (mask > 0).astype(np.uint8) * 255
@@ -1369,22 +1339,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         eval_debug_dir: Path | None = mask_debug_dir if mask_debug_dir is not None else None
 
         def _eval_log(score: float, reason: str, scoring_ok: bool) -> None:
-            global _eval_table_header_printed
-            if log_context is None:
-                return
-            if not _eval_table_header_printed:
-                _eval_table_header_printed = True
-                print('  | transform     | pair                     | source          | scoring | Validation | Score  | Zero-score Reason |')
-                print('  |---------------|--------------------------|-----------------|---------|------------|--------|-------------------|')
-            transform_idx = log_context.get('transform_idx', -1)
-            pair_indices = log_context.get('pair_indices', [])
-            pair_str = ','.join((str(i) for i in pair_indices))
-            validation_ok = not score_only
-            score_str = f'{score:.4f}'
-            tf = f'transform[{transform_idx}]'
-            pair = f'pair [{pair_str}]'
-            reason_cell = reason if score == 0.0 and reason else ''
-            print(f'  | {tf:<13} | {pair:<24} | {source:<15} | {str(scoring_ok):<7} | {str(validation_ok):<10} | {score_str:>6} | {reason_cell:<17} |')
+            return
         t_total_start = time.perf_counter() if _score_profile else 0.0
         t_validation_end: float | None = None
         t_score_start: float | None = None
@@ -1406,16 +1361,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         use_cache = True
 
         def _log_score_profile(status: str) -> None:
-            if not _score_profile:
-                return
-            t_end = time.perf_counter()
-            total_ms = (t_end - t_total_start) * 1000.0
-            validation_ms = (t_validation_end - t_total_start) * 1000.0 if t_validation_end is not None else 0.0
-            score_only_ms = (t_end - t_score_start) * 1000.0 if t_score_start is not None else 0.0
-            print('[tv][kp_score_profile] frame=%s status=%s total_ms=%.2f validation_ms=%.2f score_ms=%.2f diff_ms=%.2f' % (str(frame_number), str(status), float(total_ms), float(validation_ms), float(score_only_ms), float(score_only_ms)))
-            print('[tv][kp_score_profile] validation clamp_ms=%.2f blacklist_ms=%.2f precheck_ms=%.2f project_ms=%.2f masks_ms=%.2f pred_ms=%.2f' % (float(t_val_clamp * 1000.0), float(t_val_blacklist * 1000.0), float(t_val_precheck * 1000.0), float(t_val_project * 1000.0), float(t_val_masks * 1000.0), float(t_val_pred * 1000.0)))
-            print('[tv][kp_score_profile] masks breakdown extract_ms=%.2f upsample_ms=%.2f refine_warp_ms=%.2f refine_extract_ms=%.2f' % (float(t_val_masks_extract * 1000.0), float(t_val_masks_upsample * 1000.0), float(t_val_masks_refine_warp * 1000.0), float(t_val_masks_refine_extract * 1000.0)))
-            print('[tv][kp_score_profile] score overlap_ms=%.2f bbox_ms=%.2f kp_ms=%.2f outside_ms=%.2f vis_ms=%.2f' % (float(t_score_overlap * 1000.0), float(t_score_bbox * 1000.0), float(t_score_kp * 1000.0), float(t_score_outside * 1000.0), float(t_score_vis * 1000.0)))
+            return
 
         def _write_mask_debug_image(value: float, status: str) -> None:
             if mask_debug_dir is None:
@@ -4030,12 +3976,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     v_10_80: dict[str, float] | None = None
     global _adding_four_points_cy_candidate_logged
     if not _adding_four_points_cy_candidate_logged:
-        if _search_horizontal_in_area_integral_cy is not None and _search_vertical_in_area_integral_cy is not None and (_integral_flat_cy is not None):
-            print('[tv][adding_four_points] Sloping line candidate search: Cython integral (search_*_in_area_integral_cy)')
-        elif _search_horizontal_in_area_cy is not None and _search_vertical_in_area_cy is not None:
-            print('[tv][adding_four_points] Sloping line candidate search: Cython (search_horizontal_in_area_cy / search_vertical_in_area_cy)')
-        else:
-            print('[tv][adding_four_points] Sloping line candidate search: Python fallback (Cython extension not loaded or missing search_*_in_area_cy)')
         _adding_four_points_cy_candidate_logged = True
     if frame_height > 0 and frame_width > 0:
         y_lo_10_80 = int(frame_height * 0.1)
@@ -5078,41 +5018,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         _t_end = time.perf_counter()
         _mark('done')
 
-        def _dt(a: str, b: str) -> float:
-            if a not in _t_marks or b not in _t_marks:
-                return 0.0
-            return float((_t_marks[b] - _t_marks[a]) * 1000.0)
-        total_ms = (_t_end - _t0) * 1000.0
-        groups_total_ms = sum((float(gr.get('profile', {}).get('group_ms', 0)) for gr in group_results))
-        print('\n' + '=' * 80)
-        print('[tv][adding_four_points] DETAILED PROFILE frame=%s total_ms=%.2f' % (str(frame_id), total_ms))
-        print('=' * 80)
-        print('  PHASE TIMELINE (ms):')
-        print('    frame_load       : %8.2f  (get_frame)' % _dt('start', 'got_frame'))
-        print('    edge_detection   : %8.2f  (Canny + tophat + blur)' % _dt('got_frame', 'edge_done'))
-        print('    integral        : %8.2f  (integral + row/col prefix)' % _dt('edge_done', 'integral_done'))
-        print('    h_candidates    : %8.2f  (horizontal sloping line search)' % _dt('integral_done', 'h_candidates_done'))
-        print('    v_candidates    : %8.2f  (vertical sloping line search)' % _dt('h_candidates_done', 'v_candidates_done'))
-        print('    best_line       : %8.2f  (best_line_for_transform assignment)' % _dt('v_candidates_done', 'best_line_done'))
-        print('    seg_precompute  : %8.2f  (segment precompute for segment path)' % float(seg_precompute_ms))
-        print('    groups_eval     : %8.2f  (all group evaluations, sum=%.2f)' % (_dt('best_line_done', 'groups_done'), groups_total_ms))
-        print('-' * 80)
-        print('  PER-GROUP BREAKDOWN:')
-        for gr in group_results:
-            prof = gr.get('profile', {})
-            gname = gr.get('group', {}).get('name', '?')
-            gms = float(prof.get('group_ms', 0))
-            sel = float(prof.get('transform_select_ms', 0))
-            yy2 = float(prof.get('transform_yy2_ms', 0))
-            scr = float(prof.get('transform_score_ms', 0))
-            tdbg = float(prof.get('transform_debug_ms', 0))
-            dbg = float(prof.get('debug_ms', 0))
-            best = float(gr.get('best_score', 0))
-            n_valid = len(gr.get('valid_scores', []))
-            print('    %-22s group_ms=%7.2f select=%6.2f yy2=%6.2f score=%7.2f tdebug=%6.2f debug=%6.2f  best=%.4f n=%d' % (gname, gms, sel, yy2, scr, tdbg, dbg, best, n_valid))
-        print('-' * 80)
-        print('  COUNTS: h_cand=%d v_cand=%d seg_down=%d seg_up=%d seg_right=%d seg_left=%d eval_calls=%d' % (int(_counts.get('h_candidates', 0)), int(_counts.get('v_candidates', 0)), int(_counts.get('seg_down', 0)), int(_counts.get('seg_up', 0)), int(_counts.get('seg_right', 0)), int(_counts.get('seg_left', 0)), int(_counts.get('eval_calls', 0))))
-        print('=' * 80 + '\n')
     selected_indices = list(selected_group['indices']) if selected_group is not None else [0, 1, 9, 13]
     return result
 
