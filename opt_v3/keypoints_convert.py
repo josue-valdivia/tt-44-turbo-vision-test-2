@@ -214,9 +214,6 @@ def _near_edges(x: float, y: float, W: int, H: int, t: int=50) -> set[str]:
         edges.add('bottom')
     return edges
 
-def _maybe_dump_debug_frame(frame_id: int, payload: dict) -> None:
-    return
-
 def _both_points_same_direction(A: tuple[float, float], B: tuple[float, float], W: int, H: int, t: int=100) -> bool:
     edges_A = _near_edges(A[0], A[1], W, H, t)
     edges_B = _near_edges(B[0], B[1], W, H, t)
@@ -320,27 +317,16 @@ def compute_frame_canny_edges(frame_bgr: np.ndarray, *, blur_ksize: int=5, canny
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 _CURRENT_PROGRESS: str = ''
-_LAST_ERROR_MSG: str = ''
-_eval_table_header_printed: bool = False
-TV_KP_PROFILE_EVERY: int = 1
 TV_AF_EVAL_PARALLEL: bool = True
 TV_AF_EVAL_MAX_WORKERS: int = 8
 
 def _kp_prof_enabled() -> bool:
     return bool(TV_KP_PROFILE)
 
-def _kp_prof_every() -> int:
-    try:
-        v = int(TV_KP_PROFILE_EVERY)
-    except Exception:
-        v = 1
-    return max(1, int(v))
-
 class _KPProfiler:
 
     def __init__(self, *, enabled: bool) -> None:
         self.enabled = bool(enabled)
-        self._every = _kp_prof_every() if self.enabled else 0
         self._t0 = time.perf_counter() if self.enabled else 0.0
         self._frame_count = 0
         self.totals_ms: dict[str, float] = {}
@@ -422,35 +408,8 @@ def _refine_masks_at_boundaries(mask_ground: np.ndarray, mask_lines: np.ndarray,
     out_lines[out_of_bounds_2d] = 0
     return (out_ground, out_lines)
 
-def _debug_mask_with_edges_red(mask: np.ndarray) -> np.ndarray:
-    boundary = _get_boundary_pixels(mask)
-    mask_bin = (mask > 0).astype(np.uint8) * 255
-    out = cv2.cvtColor(mask_bin, cv2.COLOR_GRAY2BGR)
-    out[boundary > 0] = (0, 0, 255)
-    return out
-
-def _debug_mask_with_refine_area_red(mask: np.ndarray, dilation_radius: int=1) -> np.ndarray:
-    refine_area = _get_refine_area(mask, dilation_radius)
-    mask_bin = (mask > 0).astype(np.uint8) * 255
-    out = cv2.cvtColor(mask_bin, cv2.COLOR_GRAY2BGR)
-    out[refine_area > 0] = (0, 0, 255)
-    return out
-
-def _save_step(name: str, img: np.ndarray, frame_number: int | None=None) -> None:
-    try:
-        out_dir = Path('debug_frames') / 'eval_steps'
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fname = name
-        if frame_number is not None:
-            fname += f'_frame_{int(frame_number):03d}'
-        out_path = out_dir / f'{fname}.png'
-        cv2.imwrite(str(out_path), img)
-    except Exception as exc:
-        logger.error('Failed to save step %s: %s', name, exc)
-
 def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[float]], frame_number: int, cached_edges: np.ndarray | None=None) -> dict[str, Any]:
-    result: dict[str, Any] = {'frame_number': int(frame_number), 'has_h': False, 'p5': None, 'p29': None, 'Ey': None, 'Fy': None, 'best_aay': None, 'best_bby': None, 'best_white_rate': None, 'kkp5': None, 'kkp29': None, 'profile': {}}
-    t_start = time.perf_counter()
+    result: dict[str, Any] = {'frame_number': int(frame_number), 'has_h': False, 'p5': None, 'p29': None, 'Ey': None, 'Fy': None, 'best_aay': None, 'best_bby': None, 'best_white_rate': None, 'kkp5': None, 'kkp29': None}
     try:
         H_img, W_img = frame.shape[:2]
         filtered_src: list[tuple[float, float]] = []
@@ -465,12 +424,9 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
             filtered_src.append((float(src_pt[0]), float(src_pt[1])))
             filtered_dst.append((dx, dy))
         if len(filtered_src) < 4:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
-        t_ = time.perf_counter()
         H_mat, _ = cv2.findHomography(np.array(filtered_src, dtype=np.float32), np.array(filtered_dst, dtype=np.float32))
         if H_mat is None:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         result['has_h'] = True
         result['H'] = H_mat.tolist()
@@ -484,21 +440,16 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
         dy_line = y2 - y1
         if abs(dx_line) < 1e-09:
             result['skipped'] = 'red line vertical'
-            result['profile']['homography_red_ms'] = (time.perf_counter() - t_) * 1000.0
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         Ey = y1 + (0.0 - x1) * (dy_line / dx_line)
         Fy = y1 + (float(W_img - 1) - x1) * (dy_line / dx_line)
         result['Ey'] = float(Ey)
         result['Fy'] = float(Fy)
-        result['profile']['homography_red_ms'] = (time.perf_counter() - t_) * 1000.0
         red_line_y_min = min(Ey, Fy)
         red_line_y_max = max(Ey, Fy)
         if red_line_y_max < 0 or red_line_y_min > H_img - 1:
             result['skipped'] = 'red line outside image range'
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
-        t_ = time.perf_counter()
         if cached_edges is not None:
             edges = cached_edges
         else:
@@ -510,8 +461,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
         edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
         edge_only = None
         edge_only_dilated = None
-        result['profile']['edges_dilate_ms'] = (time.perf_counter() - t_) * 1000.0
-        t_green = time.perf_counter()
         LINE_WIDTH_PX_41 = 10
         half_width_41 = LINE_WIDTH_PX_41 // 2
         LINE_SAMPLE_MAX_41 = 256
@@ -599,7 +548,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
             best_bby = int(round(Fy))
             if best_rate < 0.0:
                 best_rate = _border_line_white_rate(float(best_aay), float(best_bby))
-        result['profile']['green_search_ms'] = (time.perf_counter() - t_green) * 1000.0
         if best_aay is not None and best_bby is not None:
             pA = (0, best_aay)
             pB = (W_img - 1, best_bby)
@@ -620,7 +568,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
                 return (ax + t * v1x, ay + t * v1y)
             green_ax, green_ay = (0.0, float(best_aay))
             green_bx, green_by = (float(W_img - 1), float(best_bby))
-            t_kkp = time.perf_counter()
             src_0_4_24_28 = np.array([[FOOTBALL_KEYPOINTS_CORRECTED[0]], [FOOTBALL_KEYPOINTS_CORRECTED[4]], [FOOTBALL_KEYPOINTS_CORRECTED[24]], [FOOTBALL_KEYPOINTS_CORRECTED[28]]], dtype=np.float32)
             proj_0_4_24_28 = cv2.perspectiveTransform(src_0_4_24_28, H_mat).reshape(-1, 2)
             cx0, cy0 = (float(proj_0_4_24_28[0][0]), float(proj_0_4_24_28[0][1]))
@@ -635,13 +582,9 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
                 pt = _line_line_intersection_41(green_ax, green_ay, green_bx, green_by, cx24, cy24, cx28, cy28)
                 if pt is not None:
                     result['kkp29'] = [float(pt[0]), float(pt[1])]
-            result['profile']['kkp_intersect_ms'] = (time.perf_counter() - t_kkp) * 1000.0
-        result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
     except Exception as exc:
         logger.error('Failed Step 4.1 border line compute for frame %s: %s', frame_number, exc)
         result['error'] = str(exc)
-    if 'total_ms' not in result.get('profile', {}):
-        result.setdefault('profile', {})['total_ms'] = (time.perf_counter() - t_start) * 1000.0
     return result
 
 def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: dict[str, Any] | None, step4_3: dict[str, Any] | None, frame: np.ndarray, frame_number: int, decision: str | None, cached_edges: np.ndarray | None=None) -> tuple[list[list[float]] | None, float]:
@@ -780,49 +723,12 @@ def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: di
     out_kps = _project_and_valid_only(best_H)
     return (out_kps, best_score)
 
-def _merge_step4_1_profile_into_parts(step4_1_result: dict[str, Any] | None, parts_ms: dict[str, float] | None) -> None:
-    if not parts_ms or not step4_1_result:
-        return
-    prof = step4_1_result.get('profile') or {}
-    total = prof.get('total_ms')
-    if total is not None:
-        parts_ms['step4_1'] = float(total)
-    for k, v in prof.items():
-        if k == 'total_ms':
-            continue
-        if isinstance(v, (int, float)):
-            if k.endswith('_ms'):
-                parts_ms[f'step4_1_{k[:-3]}'] = float(v)
-            else:
-                parts_ms[f'step4_1_{k}'] = float(v)
-_STEP4_3_COUNT_KEYS = frozenset({'AB_coarse_candidates', 'AB_refine_candidates', 'AB_best_white_rate', 'CD_best_white_rate', 'CD_coarse_candidates', 'CD_refine_candidates'})
-
-def _merge_step4_3_profile_into_parts(step4_3_result: dict[str, Any] | None, parts_ms: dict[str, float] | None) -> None:
-    if not parts_ms or not step4_3_result:
-        return
-    prof = step4_3_result.get('profile') or {}
-    total = prof.get('total_ms')
-    if total is not None:
-        parts_ms['step4_3'] = float(total)
-    for k, v in prof.items():
-        if k == 'total_ms':
-            continue
-        if isinstance(v, (int, float)):
-            if k in _STEP4_3_COUNT_KEYS:
-                parts_ms[f'step4_3_{k}_n'] = float(v)
-            elif k.endswith('_ms'):
-                parts_ms[f'step4_3_{k[:-3]}'] = float(v)
-            else:
-                parts_ms[f'step4_3_{k}'] = float(v)
-
 def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list[float]], frame_number: int, decision: str | None=None, cached_edges: np.ndarray | None=None) -> dict[str, Any]:
-    result: dict[str, Any] = {'frame_number': int(frame_number), 'did_line_draw': False, 'kkp4': None, 'kkp12': None, 'kkp28': None, 'kkp20': None, 'profile': {}}
-    t_start = time.perf_counter()
+    result: dict[str, Any] = {'frame_number': int(frame_number), 'did_line_draw': False, 'kkp4': None, 'kkp12': None, 'kkp28': None, 'kkp20': None}
     try:
         H_img, W_img = frame.shape[:2]
         template_len = len(FOOTBALL_KEYPOINTS_CORRECTED)
         if not ordered_kps or len(ordered_kps) < template_len:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         use_right = decision == 'right'
         bottom_idx = 20 if use_right else 12
@@ -832,9 +738,7 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
         side_label = 'right' if use_right else 'left'
         max_idx_required = 28 if use_right else 12
         if len(ordered_kps) <= max_idx_required:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
-        t_ = time.perf_counter()
         if cached_edges is not None:
             edges = cached_edges
         else:
@@ -845,8 +749,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
         edge_dilated_bgr = None
-        result['profile']['edges_dilate_ms'] = (time.perf_counter() - t_) * 1000.0
-        t_ = time.perf_counter()
         filtered_src: list[tuple[float, float]] = []
         filtered_dst: list[tuple[float, float]] = []
         for src_pt, kp in zip(FOOTBALL_KEYPOINTS_CORRECTED, ordered_kps, strict=True):
@@ -858,11 +760,9 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             filtered_src.append((float(src_pt[0]), float(src_pt[1])))
             filtered_dst.append((dx, dy))
         if len(filtered_src) < 4:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         H_mat, _ = cv2.findHomography(np.array(filtered_src, dtype=np.float32), np.array(filtered_dst, dtype=np.float32))
         if H_mat is None:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         all_proj = cv2.perspectiveTransform(np.array([[float(p[0]), float(p[1])] for p in FOOTBALL_KEYPOINTS_CORRECTED], dtype=np.float32).reshape(-1, 1, 2), H_mat)
         all_proj_list = [[float(all_proj[i][0][0]), float(all_proj[i][0][1])] for i in range(len(all_proj))]
@@ -890,14 +790,11 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             p = all_proj_list[idx_C]
             pt_C = (int(round(p[0])), int(round(p[1])))
         if pt_A is None or pt_bottom is None or pt_C is None:
-            result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
             return result
         x_A, y_A = (pt_A[0], pt_A[1])
         x_bottom, y_bottom = (pt_bottom[0], pt_bottom[1])
         x_C, y_C = (pt_C[0], pt_C[1])
         pt_top = _red_line_pos(idx_top)
-        result['profile']['homography_red_ms'] = (time.perf_counter() - t_) * 1000.0
-        t_ = time.perf_counter()
         LINE_WIDTH_PX = 10
         STEP_COARSE = 8
         REFINE_RADIUS = 2
@@ -974,12 +871,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
                     best_b_y = b_y
         best_a = (x_A, best_a_y)
         best_b = (x_bottom, best_b_y)
-        total_candidates = coarse_candidates + (a_ref_max - a_ref_min + 1) * (b_ref_max - b_ref_min + 1)
-        result['profile']['AB_search_ms'] = (time.perf_counter() - t_) * 1000.0
-        result['profile']['AB_coarse_candidates'] = coarse_candidates
-        result['profile']['AB_refine_candidates'] = (a_ref_max - a_ref_min + 1) * (b_ref_max - b_ref_min + 1)
-        result['profile']['AB_best_white_rate'] = best_rate
-        t_ = time.perf_counter()
         c_y_min = max(0, y_C - 30)
         c_y_max = min(H_img - 1, y_C + 30)
         d_y_min = max(0, y_bottom - 30)
@@ -1016,10 +907,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
                     best_d_y = d_y
         best_c = (x_C, best_c_y)
         best_d = (x_bottom, best_d_y)
-        result['profile']['CD_search_ms'] = (time.perf_counter() - t_) * 1000.0
-        result['profile']['CD_coarse_candidates'] = cd_coarse_candidates
-        result['profile']['CD_refine_candidates'] = cd_refine_candidates
-        result['profile']['CD_best_white_rate'] = best_cd_rate
         def _line_line_intersection(ax: float, ay: float, bx: float, by: float, cx: float, cy: float, dx: float, dy: float) -> tuple[float, float] | None:
             v1x, v1y = (bx - ax, by - ay)
             v2x, v2y = (dx - cx, dy - cy)
@@ -1041,7 +928,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             x_F, y_F = (float(p_F[0]), float(p_F[1]))
             pt_E = (int(round(x_E)), int(round(y_E)))
             pt_F = (int(round(x_F)), int(round(y_F)))
-            t_ = time.perf_counter()
             x_E_int, y_E_int = (int(round(x_E)), int(round(y_E)))
             x_F_int, y_F_int = (int(round(x_F)), int(round(y_F)))
             ef_a_y_min = y_E_int - 30
@@ -1078,8 +964,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
                             best_ef_b_y = ef_b_y
             best_ef_a = (x_E_int, best_ef_a_y)
             best_ef_b = (x_F_int, best_ef_b_y)
-            result['profile']['EF_search_ms'] = (time.perf_counter() - t_) * 1000.0
-            result['profile']['EF_best_white_rate'] = best_ef_rate
             ef_ax, ef_ay = (float(best_ef_a[0]), float(best_ef_a[1]))
             ef_bx, ef_by = (float(best_ef_b[0]), float(best_ef_b[1]))
             pt_ef_ab = _line_line_intersection(ef_ax, ef_ay, ef_bx, ef_by, ax, ay, bx, by)
@@ -1095,66 +979,10 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             else:
                 result['kkp12'] = [pt_ab_cd[0], pt_ab_cd[1]]
         result['did_line_draw'] = True
-        result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
     except Exception as e:
         logger.error('Step 4.3 failed for frame %s: %s', frame_number, e)
         result['error'] = str(e)
     return result
-
-def _save_four_points_visualization(frame: np.ndarray, four_points: list[int], keypoints: list[list[float]], connections: list[list[int]], frame_number: int, labels: list[int] | None=None) -> None:
-    try:
-        vis_frame = frame.copy()
-        selected_indices = set(four_points[:4]) if len(four_points) >= 4 else set()
-        if connections:
-            for conn in connections:
-                if len(conn) >= 2:
-                    idx1, idx2 = (int(conn[0]), int(conn[1]))
-                    if 0 <= idx1 < len(keypoints) and 0 <= idx2 < len(keypoints):
-                        kp1 = keypoints[idx1]
-                        kp2 = keypoints[idx2]
-                        if kp1 and len(kp1) >= 2 and (not (abs(kp1[0]) < 1e-06 and abs(kp1[1]) < 1e-06)) and kp2 and (len(kp2) >= 2) and (not (abs(kp2[0]) < 1e-06 and abs(kp2[1]) < 1e-06)):
-                            x1, y1 = (int(float(kp1[0])), int(float(kp1[1])))
-                            x2, y2 = (int(float(kp2[0])), int(float(kp2[1])))
-                            cv2.line(vis_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        font_thickness = 2
-        text_offset_x = 8
-        text_offset_y = -10
-        for idx, kp in enumerate(keypoints):
-            if kp and len(kp) >= 2:
-                x, y = (float(kp[0]), float(kp[1]))
-                if not (abs(x) < 1e-06 and abs(y) < 1e-06):
-                    x_int, y_int = (int(x), int(y))
-                    if idx in selected_indices:
-                        cv2.circle(vis_frame, (x_int, y_int), 4, (255, 0, 0), -1)
-                    else:
-                        cv2.circle(vis_frame, (x_int, y_int), 3, (0, 0, 255), -1)
-                    text_num = str(idx)
-                    (text_width, text_height), baseline = cv2.getTextSize(text_num, font, font_scale, font_thickness)
-                    text_x = x_int + text_offset_x
-                    text_y = y_int + text_offset_y
-                    cv2.putText(vis_frame, text_num, (text_x, text_y), font, font_scale, (0, 0, 255), font_thickness)
-                    if labels is not None and 0 <= idx < len(labels):
-                        label_val = labels[idx]
-                        if label_val is not None:
-                            text_label = f'L{int(label_val)}'
-                            label_y = text_y + text_height + 2
-                            cv2.putText(vis_frame, text_label, (text_x, label_y), font, font_scale, (255, 0, 0), font_thickness)
-        out_dir = Path('debug_frames')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f'frame_{frame_number:05d}_four_points.png'
-        cv2.imwrite(str(out_path), vis_frame)
-    except Exception as exc:
-        logger.error('Failed to save four points visualization for frame %s: %s', frame_number, exc)
-
-def _log_error(msg: str, frame_number: int | None, *, log_frame_number: bool) -> None:
-    global _LAST_ERROR_MSG, _CURRENT_PROGRESS
-    error_part = f' | {msg}' if msg else ''
-    if error_part != _LAST_ERROR_MSG:
-        _LAST_ERROR_MSG = error_part
-        combined = f'{_CURRENT_PROGRESS}{error_part}'.ljust(135)
-        print(f'\r{combined}', end='', flush=True)
 
 class InvalidMask(Exception):
     pass
@@ -1333,115 +1161,13 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         mask_ground_bin = None
         mask_lines_expected = None
         homography_matrix = None
-        _score_profile = bool(TV_KP_PROFILE)
         score_only = bool(score_only)
-        source = 'template-projected' if mask_polygons is None else 'file-polygon' if ADD4_POLYGON_USE_JSON else 'incode-polygon'
-        eval_debug_dir: Path | None = mask_debug_dir if mask_debug_dir is not None else None
-
-        def _eval_log(score: float, reason: str, scoring_ok: bool) -> None:
-            return
-        t_total_start = time.perf_counter() if _score_profile else 0.0
-        t_validation_end: float | None = None
-        t_score_start: float | None = None
-        t_score_bbox = 0.0
-        t_score_kp = 0.0
-        t_score_outside = 0.0
-        t_score_overlap = 0.0
-        t_score_vis = 0.0
-        t_val_clamp = 0.0
-        t_val_blacklist = 0.0
-        t_val_precheck = 0.0
-        t_val_project = 0.0
-        t_val_masks = 0.0
-        t_val_masks_extract = 0.0
-        t_val_masks_upsample = 0.0
-        t_val_masks_refine_warp = 0.0
-        t_val_masks_refine_extract = 0.0
-        t_val_pred = 0.0
         use_cache = True
 
-        def _log_score_profile(status: str) -> None:
-            return
-
-        def _write_mask_debug_image(value: float, status: str) -> None:
-            if mask_debug_dir is None:
-                return
-            if mask_lines_expected is None:
-                return
-            try:
-                edges_vis = cached_edges
-                if edges_vis is None:
-                    edges_vis = compute_frame_canny_edges(frame)
-                base = cv2.cvtColor(edges_vis, cv2.COLOR_GRAY2BGR)
-                line_mask = (mask_lines_expected > 0).astype(np.uint8)
-                if line_mask.any():
-                    overlay = base.copy()
-                    overlay[line_mask > 0] = (0, 0, 255)
-                    alpha = 0.5
-                    base = cv2.addWeighted(base, 1.0 - alpha, overlay, alpha, 0)
-                text = f'score: {value:.4f}' if value > 0.0 else str(status)
-                cv2.putText(base, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2, cv2.LINE_AA)
-                label = mask_debug_label or 'mask'
-                frame_tag = 'na' if frame_number is None else f'{int(frame_number):03d}'
-                mask_debug_dir.mkdir(parents=True, exist_ok=True)
-                out_path = mask_debug_dir / f'frame_{frame_tag}_mask_{label}.png'
-                cv2.imwrite(str(out_path), base)
-            except Exception:
-                pass
-
-        def _write_eval_debug_images(status: str, **kwargs: Any) -> None:
-            if eval_debug_dir is None:
-                return
-            try:
-                frame_tag = 'na' if frame_number is None else f'{int(frame_number):03d}'
-                tf_idx = log_context.get('transform_idx', -1) if log_context else -1
-                pair_str = ','.join((str(i) for i in log_context.get('pair_indices', []) or []))
-                suffix = f'_t{tf_idx}_pair_{pair_str}' if log_context and pair_str else ''
-                base_name = f'frame_{frame_tag}{suffix}_{status}'
-                eval_debug_dir.mkdir(parents=True, exist_ok=True)
-                vis = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                for idx, (x, y) in enumerate(frame_keypoints):
-                    if x == 0 and y == 0:
-                        continue
-                    ix, iy = (int(round(x)), int(round(y)))
-                    if 0 <= ix < vis.shape[1] and 0 <= iy < vis.shape[0]:
-                        color = (0, 255, 0)
-                        r = 4
-                        blacklist_tuple = kwargs.get('blacklist_tuple')
-                        if blacklist_tuple and idx + 1 in blacklist_tuple:
-                            color = (0, 0, 255)
-                            r = 8
-                        cv2.circle(vis, (ix, iy), r, color, 2)
-                        cv2.putText(vis, str(idx + 1), (ix + 6, iy - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-                msg = status
-                error_msg = kwargs.get('error_msg')
-                if error_msg:
-                    msg = f'{status}: {error_msg[:80]}'
-                cv2.putText(vis, msg, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
-                out_path = eval_debug_dir / f'{base_name}.png'
-                cv2.imwrite(str(out_path), vis)
-                warped_template = kwargs.get('warped_template')
-                if warped_template is not None and getattr(warped_template, 'shape', None):
-                    warp_path = eval_debug_dir / f'frame_{frame_tag}{suffix}_warped.png'
-                    cv2.imwrite(str(warp_path), warped_template)
-            except Exception:
-                pass
-
-        def _score_profile_return(value: float, status: str, **kwargs: Any) -> float:
-            nonlocal t_validation_end, t_score_start
-            if _score_profile and t_validation_end is None:
-                t_validation_end = time.perf_counter()
-            if _score_profile and t_score_start is None:
-                t_score_start = t_validation_end
-            _eval_log(value, status, status == 'ok')
-            _log_score_profile(status)
-            _write_mask_debug_image(value, status)
-            if value == 0.0 and eval_debug_dir is not None:
-                _write_eval_debug_images(status, **kwargs)
+        def _early_return(value: float) -> float:
             return value
         frame_id_str = f'Frame {frame_number}' if frame_number is not None else 'Frame'
         frame_height, frame_width = frame.shape[:2]
-        t_step = time.perf_counter() if _score_profile else 0.0
         original_keypoints = frame_keypoints[:]
         if _normalize_keypoints_cy is not None:
             try:
@@ -1458,53 +1184,35 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     frame_keypoints.append((0, 0))
                 else:
                     frame_keypoints.append((xf, yf))
-        if _score_profile:
-            t_val_clamp += time.perf_counter() - t_step
         if not score_only:
-            t_step = time.perf_counter() if _score_profile else 0.0
             non_idx_set = {idx + 1 for idx, kpts in enumerate(frame_keypoints) if not (kpts[0] == 0 and kpts[1] == 0)}
             for blacklist in BLACKLISTS:
                 if non_idx_set.issubset(blacklist):
                     if _both_points_same_direction(frame_keypoints[blacklist[0] - 1], frame_keypoints[blacklist[1] - 1], frame_width, frame_height):
-                        if log_context is not None:
-                            tf_idx = log_context.get('transform_idx', -1)
-                            pair_str = ','.join((str(i) for i in log_context.get('pair_indices', [])))
-                            kp_a = frame_keypoints[blacklist[0] - 1]
-                            kp_b = frame_keypoints[blacklist[1] - 1]
-                            print(f'  [blacklist] transform[{tf_idx}] pair [{pair_str}]: matched blacklist {tuple(blacklist)}, same-direction check on keypoints (1-based) {blacklist[0]}={tuple(kp_a)}, {blacklist[1]}={tuple(kp_b)}')
-                        return _score_profile_return(0.0, 'blacklist', blacklist_tuple=tuple(blacklist))
-            if _score_profile:
-                t_val_blacklist += time.perf_counter() - t_step
+                        return _early_return(0.0)
         cache_key: tuple = (int(frame_number) if frame_number is not None else -1, int(frame_width), int(frame_height), tuple(((float(x), float(y)) for x, y in frame_keypoints)))
         if mask_polygons is None:
             cache_key = cache_key + (round(processing_scale, 6),)
         if use_cache and cache_key in _KP_SCORE_CACHE:
             cached_score = float(_KP_SCORE_CACHE[cache_key])
             _KP_SCORE_CACHE.move_to_end(cache_key)
-            if _score_profile:
-                t_validation_end = time.perf_counter()
-                _log_score_profile('cache')
             return cached_score
-        t_step = time.perf_counter() if _score_profile else 0.0
         valid_keypoints = [(x, y) for x, y in frame_keypoints if not (x == 0 and y == 0)]
         if len(valid_keypoints) < 4:
-            return _score_profile_return(0.0, 'insufficient_kp')
+            return _early_return(0.0)
         if not score_only:
             xs, ys = zip(*valid_keypoints)
             min_x_kp, max_x_kp = (min(xs), max(xs))
             min_y_kp, max_y_kp = (min(ys), max(ys))
             if max_x_kp < 0 or max_y_kp < 0 or min_x_kp >= frame_width or (min_y_kp >= frame_height):
-                return _score_profile_return(0.0, 'kp_outside')
+                return _early_return(0.0)
             if max_x_kp - min_x_kp > 2 * frame_width or max_y_kp - min_y_kp > 2 * frame_height:
-                return _score_profile_return(0.0, 'kp_spread')
-            if _score_profile:
-                t_val_precheck += time.perf_counter() - t_step
+                return _early_return(0.0)
         cached_warp = _KP_WARP_CACHE.get(cache_key) if use_cache else None
         if cached_warp is not None:
             _KP_WARP_CACHE.move_to_end(cache_key)
             warped_template, mask_ground_bin, mask_lines_expected = cached_warp
         if warped_template is None and homography_matrix is None:
-            t_step = time.perf_counter() if _score_profile else 0.0
             try:
                 if mask_polygons is not None:
                     filtered_src: list[tuple[int, int]] = []
@@ -1536,13 +1244,10 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     else:
                         warped_template, homography_matrix = project_image_using_keypoints(image=floor_markings_template, source_keypoints=template_keypoints, destination_keypoints=frame_keypoints, destination_width=frame_width, destination_height=frame_height, return_h=True)
             except ValueError as e:
-                return _score_profile_return(0.0, 'proj_fail')
+                return _early_return(0.0)
             except InvalidMask as e:
-                return _score_profile_return(0.0, 'proj_invalid')
-            if _score_profile:
-                t_val_project += time.perf_counter() - t_step
+                return _early_return(0.0)
         if mask_ground_bin is None or mask_lines_expected is None:
-            t_step = time.perf_counter() if _score_profile else 0.0
             try:
                 if mask_polygons is not None:
                     if homography_matrix is None:
@@ -1551,39 +1256,24 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                 else:
                     if warped_template is None:
                         raise ValueError('Non-polygon path requires warped_template from project_image_using_keypoints')
-                    _t = time.perf_counter() if _score_profile else 0.0
                     mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(warped_template, debug_frame_id=frame_number)
-                    if _score_profile:
-                        t_val_masks_extract += time.perf_counter() - _t
                     if 0 < processing_scale < 1.0:
-                        _t = time.perf_counter() if _score_profile else 0.0
                         mask_ground_bin = cv2.resize(mask_ground_bin, (frame_width, frame_height), interpolation=cv2.INTER_NEAREST)
                         mask_ground_bin = (mask_ground_bin > 0).astype(np.uint8)
                         mask_lines_expected = cv2.resize(mask_lines_expected, (frame_width, frame_height), interpolation=cv2.INTER_NEAREST)
                         mask_lines_expected = (mask_lines_expected > 0).astype(np.uint8)
-                        if _score_profile:
-                            t_val_masks_upsample += time.perf_counter() - _t
                         if REFINE_EXPECTED_MASKS_AT_BOUNDARIES:
                             tpl = floor_markings_template if floor_markings_template is not None else challenge_template()
                             if tpl is not None:
-                                _t = time.perf_counter() if _score_profile else 0.0
                                 warped_full, _ = project_image_using_keypoints(image=tpl, source_keypoints=template_keypoints, destination_keypoints=frame_keypoints, destination_width=frame_width, destination_height=frame_height, return_h=True)
-                                if _score_profile:
-                                    t_val_masks_refine_warp += time.perf_counter() - _t
-                                _t = time.perf_counter() if _score_profile else 0.0
                                 mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(warped_full, debug_frame_id=frame_number)
-                                if _score_profile:
-                                    t_val_masks_refine_extract += time.perf_counter() - _t
             except InvalidMask as e:
-                return _score_profile_return(0.0, 'mask_fail', error_msg=str(e), warped_template=warped_template)
+                return _early_return(0.0)
             if use_cache:
                 _KP_WARP_CACHE[cache_key] = (warped_template, mask_ground_bin, mask_lines_expected)
                 _KP_WARP_CACHE.move_to_end(cache_key)
                 if len(_KP_WARP_CACHE) > _KP_CACHE_MAX:
                     _KP_WARP_CACHE.popitem(last=False)
-            if _score_profile:
-                t_val_masks += time.perf_counter() - t_step
-        t_step = time.perf_counter() if _score_profile else 0.0
         if mask_polygons is not None:
             edges = cached_edges
             if edges is None:
@@ -1604,17 +1294,11 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     _KP_PRED_CACHE.move_to_end(cache_key)
                     if len(_KP_PRED_CACHE) > _KP_CACHE_MAX:
                         _KP_PRED_CACHE.popitem(last=False)
-        if _score_profile:
-            t_val_pred += time.perf_counter() - t_step
-        t_step = time.perf_counter() if _score_profile else 0.0
         pixels_overlapping_result = cv2.bitwise_and(mask_lines_expected, mask_lines_predicted)
-        if _score_profile:
-            t_score_overlap += time.perf_counter() - t_step
         if not score_only:
-            t_step = time.perf_counter() if _score_profile else 0.0
             pts = cv2.findNonZero(mask_lines_expected)
             if pts is None or len(pts) == 0:
-                return _score_profile_return(0.0, 'no_expected')
+                return _early_return(0.0)
             else:
                 min_x, min_y, w_box, h_box = cv2.boundingRect(pts)
                 max_x = int(min_x + w_box - 1)
@@ -1623,57 +1307,36 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             frame_area = frame_height * frame_width
             if bbox_area / frame_area < 0.2:
-                return _score_profile_return(0.0, 'bbox_small')
-            if _score_profile:
-                t_score_bbox += time.perf_counter() - t_step
-            t_step = time.perf_counter() if _score_profile else 0.0
+                return _early_return(0.0)
             valid_keypoints = [(x, y) for x, y in frame_keypoints if not (x == 0 and y == 0)]
             if not valid_keypoints:
-                return _score_profile_return(0.0, 'no_valid_kp')
+                return _early_return(0.0)
             xs, ys = zip(*valid_keypoints)
             min_x_kp, max_x_kp = (min(xs), max(xs))
             min_y_kp, max_y_kp = (min(ys), max(ys))
             if max_x_kp < 0 or max_y_kp < 0 or min_x_kp >= frame_width or (min_y_kp >= frame_height):
-                return _score_profile_return(0.0, 'kp_outside2')
+                return _early_return(0.0)
             if max_x_kp - min_x_kp > 2 * frame_width or max_y_kp - min_y_kp > 2 * frame_height:
-                return _score_profile_return(0.0, 'kp_spread2')
-            if _score_profile:
-                t_score_kp += time.perf_counter() - t_step
-            t_step = time.perf_counter() if _score_profile else 0.0
+                return _early_return(0.0)
             inv_expected = cv2.bitwise_not(mask_lines_expected)
             pixels_rest = cv2.bitwise_and(inv_expected, mask_lines_predicted).sum()
             total_pixels = cv2.bitwise_or(mask_lines_expected, mask_lines_predicted).sum()
             if total_pixels == 0:
-                return _score_profile_return(0.0, 'total_zero')
+                return _early_return(0.0)
             if pixels_rest / total_pixels > 0.9:
-                return _score_profile_return(0.0, 'outside_ratio')
-            if _score_profile:
-                t_score_outside += time.perf_counter() - t_step
-        if _score_profile and t_validation_end is None:
-            t_validation_end = time.perf_counter()
-            t_score_start = t_validation_end
-        t_step = time.perf_counter() if _score_profile else 0.0
+                return _early_return(0.0)
         pixels_overlapping = pixels_overlapping_result.sum()
         pixels_on_lines = mask_lines_expected.sum()
         overlap_ratio = float(pixels_overlapping) / float(pixels_on_lines + 1e-08)
-        if _score_profile:
-            t_score_overlap += time.perf_counter() - t_step
-        t_step = time.perf_counter() if _score_profile else 0.0
-        if _score_profile:
-            t_score_vis += time.perf_counter() - t_step
-        logger.info('[evaluate_keypoints_for_frame] frame=%s overlap=%d expected_lines=%d ratio=%.6f', frame_number, int(pixels_overlapping), int(pixels_on_lines), overlap_ratio)
         if use_cache:
             _KP_SCORE_CACHE[cache_key] = float(overlap_ratio)
             _KP_SCORE_CACHE.move_to_end(cache_key)
             if len(_KP_SCORE_CACHE) > _KP_CACHE_MAX:
                 _KP_SCORE_CACHE.popitem(last=False)
-        _eval_log(float(overlap_ratio), '', True)
-        _log_score_profile('ok')
-        _write_mask_debug_image(float(overlap_ratio), 'ok')
         return overlap_ratio
     except Exception as e:
         pass
-    return _score_profile_return(0.0, 'exception')
+    return _early_return(0.0)
 
 def _step5_validate_ordered_keypoints(*, ordered_kps: list[list[float]], frame: np.ndarray, template_image: np.ndarray, template_keypoints: list[tuple[int, int]], frame_number: int, best_meta: dict[str, Any], debug_label: str | None=None, cached_edges: np.ndarray | None=None) -> tuple[bool, str | None, list[list[float]]]:
     validation_passed = False
@@ -2374,15 +2037,6 @@ def _step3_build_ordered_candidates(*, step2_entry: dict[str, Any], template_pat
         patterns_src = template_patterns
         patterns_src_key = 'all'
     expanded_patterns_cache: dict[tuple[bool, ...], tuple[tuple[bool, ...], ...]] = {}
-    do_prof = _kp_prof_enabled()
-    t_pat = t_dedupe = t_allowed = t_label = t_connlabel = t_conn = t_y = 0.0
-    t_pat_expand = t_pat_collect = 0.0
-    t_label_cy = t_connlabel_cy = t_conn_cy = 0.0
-    n_quads = 0
-    n_cand_all = n_cand_unique = 0
-    n_after_allowed = n_after_label = n_after_connlabel = n_after_conn = n_after_y = 0
-    max_cand_unique = max_cand_final = 0
-    n_label_cy = n_connlabel_cy = n_conn_cy = 0
     mapped: list[dict[str, Any]] = []
 
     def _cand_arr_from_candidates(cands: list[tuple[int, ...]] | list[list[int]]) -> np.ndarray:
@@ -2497,23 +2151,11 @@ def _step3_build_ordered_candidates(*, step2_entry: dict[str, Any], template_pat
         step3_workers = min(len(frame_four_points), TV_AF_EVAL_MAX_WORKERS)
         with ThreadPoolExecutor(max_workers=step3_workers) as ex:
             mapped = list(ex.map(_process_one_quad, frame_four_points))
-        if do_prof:
-            n_quads = len(frame_four_points)
     else:
         for quad in frame_four_points:
-            n_quads += 1
-            if do_prof:
-                t0 = time.perf_counter()
             entry = _process_one_quad(quad)
-            if do_prof:
-                t_pat += (time.perf_counter() - t0) * 1000.0
             mapped.append(entry)
-            if do_prof:
-                n_cand_all += entry.get('candidates_count', 0)
-                max_cand_final = max(max_cand_final, entry.get('candidates_count', 0))
     out = {'frame_id': step2_entry['frame_id'], 'connections': list(frame_connections), 'keypoints': frame_keypoints, 'frame_size': frame_size, 'labels': frame_labels, 'decision': decision, 'matches': mapped}
-    if do_prof:
-        out['step3_profile'] = {'step3_pat': float(t_pat), 'step3_pat_expand': float(t_pat_expand), 'step3_pat_collect': float(t_pat_collect), 'step3_dedupe': float(t_dedupe), 'step3_allowed': float(t_allowed), 'step3_label': float(t_label), 'step3_label_cy': float(t_label_cy), 'step3_connlabel': float(t_connlabel), 'step3_connlabel_cy': float(t_connlabel_cy), 'step3_conn': float(t_conn), 'step3_conn_cy': float(t_conn_cy), 'step3_y': float(t_y), 'step3_quads_n': float(n_quads), 'step3_cand_all_n': float(n_cand_all), 'step3_cand_unique_n': float(n_cand_unique), 'step3_after_allowed_n': float(n_after_allowed), 'step3_after_label_n': float(n_after_label), 'step3_after_connlabel_n': float(n_after_connlabel), 'step3_after_conn_n': float(n_after_conn), 'step3_after_y_n': float(n_after_y), 'step3_max_unique_n': float(max_cand_unique), 'step3_max_final_n': float(max_cand_final), 'step3_label_cy_n': float(n_label_cy), 'step3_connlabel_cy_n': float(n_connlabel_cy), 'step3_conn_cy_n': float(n_conn_cy)}
     return out
 
 def _step4_pick_best_candidate(*, matches: list[dict[str, Any]], orig_kps: list[list[float]], frame_keypoints: list, frame_labels: list, decision: str | None, template_pts: np.ndarray, frame_number: int) -> tuple[float, dict[str, Any] | None, list[int] | None]:
@@ -3531,15 +3173,8 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         frame_id = int(frame_id)
     except Exception:
         pass
-    global _eval_table_header_printed
-    _eval_table_header_printed = False
-    _profile = bool(TV_KP_PROFILE)
-    _t0 = time.perf_counter() if _profile else 0.0
-    _t_marks: dict[str, float] = {}
-    if _profile:
-        _t_marks['start'] = _t0
     _counts: dict[str, int] = {}
-    _t_eval_total = 0.0
+    _profile = False
     debug_log_lines: list[str] = []
 
     def _debug_log(msg: str) -> None:
@@ -3553,19 +3188,15 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             pass
 
     def _mark(name: str) -> None:
-        if _profile:
-            _t_marks[name] = time.perf_counter()
+        pass
 
     def _bump(name: str, n: int=1) -> None:
-        if _profile:
-            _counts[name] = _counts.get(name, 0) + int(n)
+        pass
 
     def _dbglog(hypothesis_id: str, message: str, data: dict[str, Any]) -> None:
         pass
     if frame_img is None:
         frame_img = frame_store.get_frame(frame_id)
-    if _profile:
-        _t_marks['got_frame'] = time.perf_counter()
     frame_height, frame_width = frame_img.shape[:2]
     result = [[0.0, 0.0] for _ in range(template_len)]
     if not ADDING_FOUR_POINTS_ENABLED:
@@ -3783,9 +3414,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             error_message = None
             status = 'rule-valid'
             try:
-                nonlocal _t_eval_total
                 _bump('eval_calls', 1)
-                _t_eval0 = time.perf_counter() if _profile else 0.0
                 polygon_masks = None
                 mask_label = None
                 mask_debug_dir = None
@@ -3795,8 +3424,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                         raise ValueError(f"Polygon masks missing for group '{group.get('name')}'")
                 mask_label = f'{group.get('name')}_xf_{transform_idx}'
                 score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS, frame_keypoints=frame_keypoints_tuples, frame=frame_img, floor_markings_template=template_image, frame_number=frame_number_val, log_frame_number=False, cached_edges=edges, mask_polygons=polygon_masks, mask_debug_label=mask_label, mask_debug_dir=mask_debug_dir, score_only=False, log_context={'transform_idx': transform_idx, 'pair_indices': list(group.get('indices', []))}, processing_scale=PROCESSING_SCALE)
-                if _profile:
-                    _t_eval_total += time.perf_counter() - _t_eval0
                 if score > 0.0:
                     status = 'score-valid'
                 else:
@@ -4986,8 +4613,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             best_group_result = group_result
     selected_group_result = best_group_result or (group_results[0] if group_results else None)
     selected_group = selected_group_result['group'] if selected_group_result is not None else None
-    if _profile:
-        _mark('groups_done')
     if ADD4_USE_POLYGON_MASKS:
         any_positive_score = any((group_result['best_score'] > 0.0 for group_result in group_results))
         if any_positive_score and selected_group_result is not None:
@@ -5014,9 +4639,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         else:
             for idx, pt in _fallback_points_default(frame_width, frame_height).items():
                 result[idx] = pt
-    if _profile:
-        _t_end = time.perf_counter()
-        _mark('done')
 
     selected_indices = list(selected_group['indices']) if selected_group is not None else [0, 1, 9, 13]
     return result
@@ -5071,9 +4693,8 @@ def main() -> None:
                 ordered_raw['frames'] = ordered_frames
 
     def _log(status: str) -> None:
-        global _LAST_ERROR_MSG, _CURRENT_PROGRESS
+        global _CURRENT_PROGRESS
         _CURRENT_PROGRESS = status
-        _LAST_ERROR_MSG = ''
         text = f'\r{status}'.ljust(135)
         print(text, end='', flush=True)
     prev_labeled: list[dict[str, Any]] | None = None
@@ -5091,14 +4712,11 @@ def main() -> None:
             _log(f'{progress_prefix} - loading')
             parts_ms: dict[str, float] = {}
             t_frame0 = prof.begin_frame()
-            t_other_load = time.perf_counter()
             frame = frame_store.get_frame(fn)
             H, W = frame.shape[:2]
             cached_edges = compute_frame_canny_edges(frame)
             if step8_edges_cache is not None:
                 _step8_edges_cache_put(step8_edges_cache, int(fn), cached_edges, STEP8_EDGE_CACHE_MAX)
-            parts_ms['other_load'] = (time.perf_counter() - t_other_load) * 1000.0
-            t_other_setup = time.perf_counter()
             frame_data = miner_predictions.get(fn, {}) or {}
             kps = original_keypoints.get(int(fn)) or []
             labels = frame_data.get('labels') or frame_data.get('keypoints_labels') or []
@@ -5116,10 +4734,7 @@ def main() -> None:
                         labels_filled[int(idx_lab)] = val if 0 <= val <= 6 else 0
                 labels = labels_filled
             labeled_cur = frame_data.get('keypoints_labeled') or []
-            parts_ms['other_setup'] = (time.perf_counter() - t_other_setup) * 1000.0
-            t_other_similar = time.perf_counter()
             handled, state_updates = _try_process_similar_frame_fast_path(fn=int(fn), progress_prefix=progress_prefix, frame=frame, frame_store=frame_store, kps=kps, labels=labels, labeled_cur=labeled_cur, template_len=template_len, ordered_frames=ordered_frames, step1_outputs=step1_outputs, step2_outputs=step2_outputs, step3_outputs=step3_outputs, step5_outputs=step5_outputs, best_entries=best_entries, original_keypoints=original_keypoints, template_image=template_image, template_pts_corrected=template_pts_corrected, template_pts=template_pts, cached_edges=cached_edges, prev_valid_labeled=prev_valid_labeled, prev_valid_original_index=prev_valid_original_index, prev_best_meta=prev_best_meta, prev_valid_frame_id=prev_valid_frame_id, log_fn=_log, push_fn=_push)
-            parts_ms['other_similar'] = (time.perf_counter() - t_other_similar) * 1000.0
             if handled:
                 if state_updates:
                     prev_labeled = state_updates.get('prev_labeled')
@@ -5150,32 +4765,17 @@ def main() -> None:
                 found['keypoints'] = ordered_kps
                 found['added_four_point'] = True
                 found.pop('original_index', None)
-                parts_ms['other_result'] = 0.0
                 _log(f'{progress_prefix} - done')
                 prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
                 continue
             _log(f'{progress_prefix} - step 1/4: connections')
-            t1 = time.perf_counter()
             step1_entry = _step1_build_connections(frame=frame, kps=kps, labels=labels, frame_number=int(fn), frame_width=int(W), frame_height=int(H), cached_edges=cached_edges)
-            parts_ms['step1'] = (time.perf_counter() - t1) * 1000.0
             _push(step1_outputs, step1_entry)
             _log(f'{progress_prefix} - step 2/4: four-point groups')
-            t2 = time.perf_counter()
             step2_entry = _step2_build_four_point_groups(frame=frame, step1_entry=step1_entry, frame_number=int(fn))
-            parts_ms['step2'] = (time.perf_counter() - t2) * 1000.0
             _push(step2_outputs, step2_entry)
             _log(f'{progress_prefix} - step 3/4: matching')
-            t3 = time.perf_counter()
             step3_entry = _step3_build_ordered_candidates(step2_entry=step2_entry, template_patterns=template_patterns, template_patterns_allowed_left=template_patterns_allowed_left, template_patterns_allowed_right=template_patterns_allowed_right, template_labels=template_labels, frame_number=int(fn))
-            parts_ms['step3'] = (time.perf_counter() - t3) * 1000.0
-            if prof.enabled:
-                sub = step3_entry.get('step3_profile') or {}
-                if isinstance(sub, dict):
-                    for k, v in sub.items():
-                        try:
-                            parts_ms[str(k)] = float(v)
-                        except Exception:
-                            pass
             _push(step3_outputs, step3_entry)
             _log(f'{progress_prefix} - step 4/4: looking for best order')
             matches = step3_entry.get('matches') or []
@@ -5183,28 +4783,20 @@ def main() -> None:
             frame_keypoints = step3_entry.get('keypoints') or []
             frame_labels = step3_entry.get('labels') or []
             decision = 'right' if FORCE_DECISION_RIGHT else step3_entry.get('decision')
-            t4 = time.perf_counter()
             best_avg, best_meta, orig_idx_map = _step4_pick_best_candidate(matches=matches, orig_kps=orig_kps, frame_keypoints=frame_keypoints, frame_labels=frame_labels, decision=decision, template_pts=template_pts, frame_number=int(fn))
-            parts_ms['step4'] = (time.perf_counter() - t4) * 1000.0
             if best_meta:
                 ordered_kps = best_meta['reordered_keypoints']
                 fallback_used = False
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
                 fallback_used = False
-                t_step41 = time.perf_counter()
                 best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
-                parts_ms['step4_1'] = (time.perf_counter() - t_step41) * 1000.0
-                _merge_step4_1_profile_into_parts(best_meta.get('step4_1'), parts_ms)
                 best_meta['step4_2'] = {}
                 best_meta['reordered_keypoints'] = ordered_kps
                 if STEP4_3_ENABLED:
                     best_meta['step4_3'] = _step4_3_debug_dilate_and_lines(frame=frame, ordered_kps=best_meta['reordered_keypoints'], frame_number=int(fn), decision=best_meta.get('decision'), cached_edges=cached_edges)
-                    _merge_step4_3_profile_into_parts(best_meta.get('step4_3'), parts_ms)
                 else:
                     best_meta['step4_3'] = {}
-                t_step49 = time.perf_counter()
                 step4_9_kps, step4_9_score = _step4_9_select_h_and_keypoints(input_kps=best_meta['reordered_keypoints'], step4_1=best_meta.get('step4_1'), step4_3=best_meta.get('step4_3'), frame=frame, frame_number=int(fn), decision=best_meta.get('decision'), cached_edges=cached_edges)
-                parts_ms['step4_9'] = (time.perf_counter() - t_step49) * 1000.0
                 if step4_9_kps is not None:
                     best_meta['reordered_keypoints'] = step4_9_kps
                     best_meta['score'] = step4_9_score
@@ -5212,9 +4804,7 @@ def main() -> None:
                 validation_passed = False
                 validation_error = None
                 if STEP5_ENABLED and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
-                    t5v = time.perf_counter()
                     validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(ordered_kps=ordered_kps, frame=frame, template_image=template_image, template_keypoints=FOOTBALL_KEYPOINTS, frame_number=int(fn), best_meta=best_meta, debug_label=None, cached_edges=cached_edges)
-                    parts_ms['step5_validate'] = parts_ms.get('step5_validate', 0.0) + (time.perf_counter() - t5v) * 1000.0
                 best_meta['validation_passed'] = validation_passed
                 if validation_error:
                     best_meta['validation_error'] = validation_error
@@ -5222,15 +4812,13 @@ def main() -> None:
                 step5_ordered_kps = ordered_kps
                 has_scoring_error = validation_error and ('A projected line is too wide' in validation_error or 'projected line' in validation_error.lower())
                 if validation_passed and step5_score < STEP5_SCORE_THRESHOLD:
-                    t_af1 = time.perf_counter()
+                    t_af = time.perf_counter()
                     adding_four_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af1) * 1000.0
+                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                     adding_four_score = 0.0
                     try:
                         adding_four_tuples = [(float(kp[0]), float(kp[1])) if kp and len(kp) >= 2 else (0.0, 0.0) for kp in adding_four_kps]
-                        t_cmp = time.perf_counter()
                         adding_four_score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS_CORRECTED, frame_keypoints=adding_four_tuples, frame=frame, floor_markings_template=template_image, frame_number=int(fn), log_frame_number=False, cached_edges=cached_edges, processing_scale=PROCESSING_SCALE)
-                        parts_ms['step5_score_compare'] = parts_ms.get('step5_score_compare', 0.0) + (time.perf_counter() - t_cmp) * 1000.0
                     except Exception as e:
                         adding_four_score = 0.0
                     if adding_four_score > step5_score:
@@ -5243,9 +4831,9 @@ def main() -> None:
                         ordered_kps = step5_ordered_kps
                         best_meta['added_four_point'] = False
                 elif step5_score == 0.0 or has_scoring_error or (not validation_passed):
-                    t_af2 = time.perf_counter()
+                    t_af = time.perf_counter()
                     ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af2) * 1000.0
+                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                     best_meta['reordered_keypoints'] = ordered_kps
                     best_meta['fallback'] = True
                     best_meta['added_four_point'] = True
@@ -5261,9 +4849,7 @@ def main() -> None:
                     best_meta['validation_error'] = validation_error
                     need_fallback = False
                 if STEP6_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
-                    t6 = time.perf_counter()
                     ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
-                    parts_ms['step6_fill'] = parts_ms.get('step6_fill', 0.0) + (time.perf_counter() - t6) * 1000.0
                     best_meta['reordered_keypoints'] = ordered_kps
                 best_entries.append(best_meta)
                 if best_meta.get('added_four_point') != True:
@@ -5274,15 +4860,14 @@ def main() -> None:
                     best_meta_copy['validation_error'] = validation_error or 'Added four points (fallback)'
                     _push(step5_outputs, best_meta_copy)
             else:
-                t_af3 = time.perf_counter()
+                t_af = time.perf_counter()
                 ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af3) * 1000.0
+                parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                 best_meta = {'frame_id': int(fn), 'match_idx': None, 'candidate_idx': None, 'candidate': [], 'avg_distance': float('inf'), 'reordered_keypoints': ordered_kps, 'fallback': True, 'decision': decision, 'added_four_point': True}
                 best_entries.append(best_meta)
                 best_meta_copy = best_meta.copy()
                 best_meta_copy['score'] = best_meta.get('score', 0.0)
                 _push(step5_outputs, best_meta_copy)
-            t_other_result = time.perf_counter()
             found = None
             for fr in ordered_frames:
                 fid = fr.get('frame_id')
@@ -5313,16 +4898,11 @@ def main() -> None:
                 prev_best_meta = None
                 prev_valid_frame_id = None
             _log(f'{progress_prefix} - done')
-            parts_ms['other_result'] = (time.perf_counter() - t_other_result) * 1000.0
             prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
-        global _LAST_ERROR_MSG, _CURRENT_PROGRESS
-        _LAST_ERROR_MSG = ''
+        global _CURRENT_PROGRESS
         _CURRENT_PROGRESS = ''
         print('\r' + ' ' * 135 + '\rProcessing frames done.')
-        t7 = time.perf_counter()
         _step7_interpolate_problematic_frames(step5_outputs=step5_outputs, ordered_frames=ordered_frames, template_len=template_len, out_step7=args.out_step7)
-        if prof.enabled:
-            prof._add('step7_interpolate', (time.perf_counter() - t7) * 1000.0)
         if KEYPOINT_H_CONVERT_FLAG:
             t8 = time.perf_counter()
             total_frames = len(ordered_frames)
@@ -5388,8 +4968,6 @@ def main() -> None:
                 frame_entry['keypoints'] = adjusted_kps
                 processed_count += 1
             print(f'Step 8: Completed processing {total_frames} frames (adjusted: {processed_count}, skipped: {skipped_count}).')
-            if prof.enabled:
-                prof._add('step8_adjust', (time.perf_counter() - t8) * 1000.0)
     finally:
         _frame_cache_clear()
         frame_store.unlink()
@@ -5546,32 +5124,17 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 found['keypoints'] = ordered_kps
                 found['added_four_point'] = True
                 found.pop('original_index', None)
-                parts_ms['other_result'] = 0.0
                 _log(f'{progress_prefix} - done')
                 prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
                 continue
             _log(f'{progress_prefix} - step 1/4: connections')
-            t1 = time.perf_counter()
             step1_entry = _step1_build_connections(frame=frame, kps=kps, labels=labels, frame_number=int(fn), frame_width=int(W), frame_height=int(H), cached_edges=cached_edges)
-            parts_ms['step1'] = (time.perf_counter() - t1) * 1000.0
             _push(step1_outputs, step1_entry)
             _log(f'{progress_prefix} - step 2/4: four-point groups')
-            t2 = time.perf_counter()
             step2_entry = _step2_build_four_point_groups(frame=frame, step1_entry=step1_entry, frame_number=int(fn))
-            parts_ms['step2'] = (time.perf_counter() - t2) * 1000.0
             _push(step2_outputs, step2_entry)
             _log(f'{progress_prefix} - step 3/4: matching')
-            t3 = time.perf_counter()
             step3_entry = _step3_build_ordered_candidates(step2_entry=step2_entry, template_patterns=template_patterns, template_patterns_allowed_left=template_patterns_allowed_left, template_patterns_allowed_right=template_patterns_allowed_right, template_labels=template_labels, frame_number=int(fn))
-            parts_ms['step3'] = (time.perf_counter() - t3) * 1000.0
-            if prof.enabled:
-                sub = step3_entry.get('step3_profile') or {}
-                if isinstance(sub, dict):
-                    for k, v in sub.items():
-                        try:
-                            parts_ms[str(k)] = float(v)
-                        except Exception:
-                            pass
             _push(step3_outputs, step3_entry)
             _log(f'{progress_prefix} - step 4/4: looking for best order')
             matches = step3_entry.get('matches') or []
@@ -5579,28 +5142,20 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
             frame_keypoints = step3_entry.get('keypoints') or []
             frame_labels = step3_entry.get('labels') or []
             decision = 'right' if FORCE_DECISION_RIGHT else step3_entry.get('decision')
-            t4 = time.perf_counter()
             best_avg, best_meta, orig_idx_map = _step4_pick_best_candidate(matches=matches, orig_kps=orig_kps, frame_keypoints=frame_keypoints, frame_labels=frame_labels, decision=decision, template_pts=template_pts, frame_number=int(fn))
-            parts_ms['step4'] = (time.perf_counter() - t4) * 1000.0
             if best_meta:
                 ordered_kps = best_meta['reordered_keypoints']
                 fallback_used = False
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
                 fallback_used = False
-                t_step41 = time.perf_counter()
                 best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
-                parts_ms['step4_1'] = (time.perf_counter() - t_step41) * 1000.0
-                _merge_step4_1_profile_into_parts(best_meta.get('step4_1'), parts_ms)
                 best_meta['step4_2'] = {}
                 best_meta['reordered_keypoints'] = ordered_kps
                 if STEP4_3_ENABLED:
                     best_meta['step4_3'] = _step4_3_debug_dilate_and_lines(frame=frame, ordered_kps=best_meta['reordered_keypoints'], frame_number=int(fn), decision=best_meta.get('decision'), cached_edges=cached_edges)
-                    _merge_step4_3_profile_into_parts(best_meta.get('step4_3'), parts_ms)
                 else:
                     best_meta['step4_3'] = {}
-                t_step49 = time.perf_counter()
                 step4_9_kps, step4_9_score = _step4_9_select_h_and_keypoints(input_kps=best_meta['reordered_keypoints'], step4_1=best_meta.get('step4_1'), step4_3=best_meta.get('step4_3'), frame=frame, frame_number=int(fn), decision=best_meta.get('decision'), cached_edges=cached_edges)
-                parts_ms['step4_9'] = (time.perf_counter() - t_step49) * 1000.0
                 if step4_9_kps is not None:
                     best_meta['reordered_keypoints'] = step4_9_kps
                     best_meta['score'] = step4_9_score
@@ -5608,9 +5163,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 validation_passed = False
                 validation_error = None
                 if STEP5_ENABLED and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
-                    t5v = time.perf_counter()
                     validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(ordered_kps=ordered_kps, frame=frame, template_image=template_image, template_keypoints=FOOTBALL_KEYPOINTS, frame_number=int(fn), best_meta=best_meta, debug_label=None, cached_edges=cached_edges)
-                    parts_ms['step5_validate'] = parts_ms.get('step5_validate', 0.0) + (time.perf_counter() - t5v) * 1000.0
                 best_meta['validation_passed'] = validation_passed
                 if validation_error:
                     best_meta['validation_error'] = validation_error
@@ -5618,15 +5171,13 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 step5_ordered_kps = ordered_kps
                 has_scoring_error = validation_error and ('A projected line is too wide' in validation_error or 'projected line' in str(validation_error).lower())
                 if validation_passed and step5_score < STEP5_SCORE_THRESHOLD:
-                    t_af1 = time.perf_counter()
+                    t_af = time.perf_counter()
                     adding_four_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af1) * 1000.0
+                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                     adding_four_score = 0.0
                     try:
                         adding_four_tuples = [(float(kp[0]), float(kp[1])) if kp and len(kp) >= 2 else (0.0, 0.0) for kp in adding_four_kps]
-                        t_cmp = time.perf_counter()
                         adding_four_score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS_CORRECTED, frame_keypoints=adding_four_tuples, frame=frame, floor_markings_template=template_image, frame_number=int(fn), log_frame_number=False, cached_edges=cached_edges, processing_scale=PROCESSING_SCALE)
-                        parts_ms['step5_score_compare'] = parts_ms.get('step5_score_compare', 0.0) + (time.perf_counter() - t_cmp) * 1000.0
                     except Exception as e:
                         adding_four_score = 0.0
                     if adding_four_score > step5_score:
@@ -5639,9 +5190,9 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                         ordered_kps = step5_ordered_kps
                         best_meta['added_four_point'] = False
                 elif step5_score == 0.0 or has_scoring_error or (not validation_passed):
-                    t_af2 = time.perf_counter()
+                    t_af = time.perf_counter()
                     ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af2) * 1000.0
+                    parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                     best_meta['reordered_keypoints'] = ordered_kps
                     best_meta['fallback'] = True
                     best_meta['added_four_point'] = True
@@ -5657,9 +5208,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     best_meta['validation_error'] = validation_error
                     need_fallback = False
                 if STEP6_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
-                    t6 = time.perf_counter()
                     ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
-                    parts_ms['step6_fill'] = parts_ms.get('step6_fill', 0.0) + (time.perf_counter() - t6) * 1000.0
                     best_meta['reordered_keypoints'] = ordered_kps
                 best_entries.append(best_meta)
                 if best_meta.get('added_four_point') != True:
@@ -5670,9 +5219,9 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     best_meta_copy['validation_error'] = validation_error or 'Added four points (fallback)'
                     _push(step5_outputs, best_meta_copy)
             else:
-                t_af3 = time.perf_counter()
+                t_af = time.perf_counter()
                 ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
-                parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af3) * 1000.0
+                parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af) * 1000.0
                 best_meta = {'frame_id': int(fn), 'match_idx': None, 'candidate_idx': None, 'candidate': [], 'avg_distance': float('inf'), 'reordered_keypoints': ordered_kps, 'fallback': True, 'decision': decision, 'added_four_point': True}
                 best_entries.append(best_meta)
                 best_meta_copy = best_meta.copy()
@@ -5707,17 +5256,12 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 prev_valid_frame_id = None
             _log(f'{progress_prefix} - done')
             prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
-        global _LAST_ERROR_MSG, _CURRENT_PROGRESS
-        _LAST_ERROR_MSG = ''
+        global _CURRENT_PROGRESS
         _CURRENT_PROGRESS = ''
         if not quiet:
             print('\r' + ' ' * 135 + '\rProcessing frames done.')
-        t7 = time.perf_counter()
         _step7_interpolate_problematic_frames(step5_outputs=step5_outputs, ordered_frames=ordered_frames, template_len=template_len, out_step7=Path('keypoint_step_7_interpolated.json'))
-        if prof.enabled:
-            prof._add('step7_interpolate', (time.perf_counter() - t7) * 1000.0)
         if KEYPOINT_H_CONVERT_FLAG:
-            t8 = time.perf_counter()
             total_frames = len(ordered_frames)
             if not quiet:
                 print(f'Step 8: Adjusting keypoints to use FOOTBALL_KEYPOINTS instead of FOOTBALL_KEYPOINTS_CORRECTED (processing {total_frames} frames)...')
@@ -5795,8 +5339,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     processed_count += 1
             if not quiet:
                 print(f'Step 8: Completed processing {total_frames} frames (adjusted: {processed_count}, skipped: {skipped_count}).')
-            if prof.enabled:
-                prof._add('step8_adjust', (time.perf_counter() - t8) * 1000.0)
     finally:
         _frame_cache_clear()
         if created_frame_store:
