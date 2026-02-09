@@ -12,8 +12,6 @@ from libc.math cimport sqrt, floor, ceil, fmin, fmax
 
 np.import_array()
 
-
-# ---- from _add4_segment_candidates_cy.pyx ----
 def segments_from_col_band(
     np.ndarray[np.int64_t, ndim=1] col_band,
     int seg_width,
@@ -252,7 +250,6 @@ def precompute_segments_from_prefix(
     return seg_down_by_line, seg_up_by_line, seg_right_by_line, seg_left_by_line
 
 
-# ---- from _connected_by_segment_cy.pyx ----
 cdef object _py_round = round
 
 
@@ -337,7 +334,6 @@ def connected_by_segment(
     return ok, hit_ratio, longest
 
 
-# ---- from _eval_kp_helpers_cy.pyx ----
 def normalize_keypoints(original_keypoints, int frame_width, int frame_height):
     cdef Py_ssize_t n = len(original_keypoints)
     cdef Py_ssize_t i
@@ -357,7 +353,6 @@ def normalize_keypoints(original_keypoints, int frame_width, int frame_height):
     return out
 
 
-# ---- from _step3_conn_constraints_cy.pyx ----
 cdef inline int _idx_in_quad(int v, int q0, int q1, int q2, int q3) nogil:
     if v == q0:
         return 0
@@ -394,7 +389,6 @@ def filter_connection_constraints(
 
     for i in range(n):
         ok = True
-        # reachability constraint (<=3 hops in frame => <=2 hops in template)
         for idx_i in range(4):
             qi = quad[idx_i]
             ti = candidates[i, idx_i]
@@ -413,7 +407,6 @@ def filter_connection_constraints(
         if not ok:
             continue
 
-        # direct edge constraint: if frame edge exists between mapped points, template must have edge
         for k in range(frame_edges.shape[0]):
             idx_i = _idx_in_quad(frame_edges[k, 0], q0, q1, q2, q3)
             if idx_i < 0:
@@ -432,7 +425,6 @@ def filter_connection_constraints(
     return out
 
 
-# ---- from _step3_conn_label_constraints_cy.pyx ----
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def filter_connection_label_constraints(
@@ -464,32 +456,26 @@ def filter_connection_label_constraints(
                 break
             mask = frame_adj_mask[qi]
 
-            # label1 min/max neighbor adjacency constraints
             if decision_flag >= 0:
                 if label1_min_idx >= 0 and ((mask >> label1_min_idx) & 1):
                     if decision_flag == 1:
-                        # right: min -> 24
                         if ((template_adj_mask[ti] >> 24) & 1) == 0:
                             ok = False
                             break
                     else:
-                        # left: min -> 0
                         if ((template_adj_mask[ti] >> 0) & 1) == 0:
                             ok = False
                             break
                 if label1_max_idx >= 0 and ((mask >> label1_max_idx) & 1):
                     if decision_flag == 1:
-                        # right: max -> 29
                         if ((template_adj_mask[ti] >> 29) & 1) == 0:
                             ok = False
                             break
                     else:
-                        # left: max -> 5
                         if ((template_adj_mask[ti] >> 5) & 1) == 0:
                             ok = False
                             break
 
-            # connected labels subset check
             labels_mask = 0
             while mask:
                 lsb = mask & (~mask + 1)
@@ -510,7 +496,6 @@ def filter_connection_label_constraints(
     return out
 
 
-# ---- from _step3_filter_labels_cy.pyx ----
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def filter_labels(
@@ -551,7 +536,6 @@ def filter_labels(
     return out
 
 
-# ---- Sloping line white count and area search (for h_candidates / v_candidates speedup) ----
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def sloping_line_white_count_cy(
@@ -685,7 +669,6 @@ def search_horizontal_in_area_cy(
     cdef int best_white = 0, best_total = 0
     cdef int y0, y1, white, total
     cdef double bx = <double>(w - 1)
-    # Coarse loop
     y0 = y_lo
     while y0 <= y_hi:
         y1 = y_lo
@@ -728,7 +711,6 @@ def search_horizontal_in_area_cy(
             y1 += coarse_step
     if best_count < 0:
         return -1, -1, -1, -1
-    # Refine
     cdef int y0_ref_min = max(y_lo, best_y0 - refine_radius)
     cdef int y0_ref_max = min(y_hi, best_y0 + refine_radius)
     cdef int y1_ref_min = max(y_lo, best_y1 - refine_radius)
@@ -775,7 +757,6 @@ def search_vertical_in_area_cy(
     cdef int best_white = 0, best_total = 0
     cdef int x0, x1, white, total
     cdef double by = <double>(h - 1)
-    # Coarse loop
     x0 = x_lo
     while x0 <= x_hi:
         x1 = x_lo
@@ -818,7 +799,6 @@ def search_vertical_in_area_cy(
             x1 += coarse_step
     if best_count < 0:
         return -1, -1, -1, -1
-    # Refine
     cdef int x0_ref_min = max(x_lo, best_x0 - refine_radius)
     cdef int x0_ref_max = min(x_hi, best_x0 + refine_radius)
     cdef int x1_ref_min = max(x_lo, best_x1 - refine_radius)

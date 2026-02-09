@@ -153,9 +153,9 @@ else:
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = False
-TV_KP_PROFILE: bool = True
-ONLY_FRAMES = list(range(2, 3))
+DEBUG_FLAG = True
+TV_KP_PROFILE: bool = False
+ONLY_FRAMES = list(range(140, 141))
 # Process frames at reduced resolution for speed (segment counts and mask work scale with area)
 PROCESSING_SCALE = 0.5  # 1.0 = full size; 0.5 = half width/height
 REFINE_EXPECTED_MASKS_AT_BOUNDARIES = True  # when True and PROCESSING_SCALE < 1, refine ground/line masks in boundary area

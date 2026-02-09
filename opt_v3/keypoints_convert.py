@@ -103,7 +103,7 @@ else:
     _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
 TV_KP_PROFILE: bool = False
-# ONLY_FRAMES = list(range(2, 3))
+ONLY_FRAMES = list(range(2, 3))
 PROCESSING_SCALE = 0.5
 REFINE_EXPECTED_MASKS_AT_BOUNDARIES = False
 STEP5_ENABLED = True

@@ -36,7 +36,7 @@ import cv2
 import numpy as np
 
 # Optional: process only specific frames (comment out to process all frames)
-ONLY_FRAMES = list(range(2, 3))
+ONLY_FRAMES = list(range(140, 141))
 
 # Debug flag: if True, output dtailed logs and step-by-step debug images
 DEBUG_FLAG = False
