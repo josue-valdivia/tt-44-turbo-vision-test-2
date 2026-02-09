@@ -101,7 +101,6 @@ else:
     _search_horizontal_in_area_integral_cy = None
     _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
-DEBUG_FLAG = False
 TV_KP_PROFILE: bool = True
 ONLY_FRAMES = list(range(2, 3))
 PROCESSING_SCALE = 0.5
@@ -150,9 +149,6 @@ SIMILARITY_MIN_SCORE_THRESHOLD = 0.3
 STEP5_SCORE_THRESHOLD = 0.9
 KEYPOINT_H_CONVERT_FLAG = True
 FORCE_DECISION_RIGHT = False
-_DEBUG_FRAME_ID = int(os.environ.get('TV_KP_DEBUG_FRAME', '-1'))
-_DEBUG_DUMP_DIR = os.environ.get('TV_KP_DEBUG_DIR', '.')
-_DEBUG_TAG = os.environ.get('TV_KP_DEBUG_TAG', '')
 STEP4_1_LINE_REFINEMENT_ENABLED = True
 STEP4_1_LINE_WEIGHT = 8
 STEP4_EARLY_TERMINATE_THRESHOLD = 20.0
@@ -219,16 +215,7 @@ def _near_edges(x: float, y: float, W: int, H: int, t: int=50) -> set[str]:
     return edges
 
 def _maybe_dump_debug_frame(frame_id: int, payload: dict) -> None:
-    if _DEBUG_FRAME_ID < 0 or frame_id != _DEBUG_FRAME_ID:
-        return
-    try:
-        tag = _DEBUG_TAG or 'run'
-        out_dir = Path(_DEBUG_DUMP_DIR)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f'kp_debug_frame_{frame_id}_{tag}.json'
-        out_path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
-    except Exception:
-        pass
+    return
 
 def _both_points_same_direction(A: tuple[float, float], B: tuple[float, float], W: int, H: int, t: int=100) -> bool:
     edges_A = _near_edges(A[0], A[1], W, H, t)
@@ -481,8 +468,6 @@ def _debug_mask_with_refine_area_red(mask: np.ndarray, dilation_radius: int=1) -
 
 def _save_step(name: str, img: np.ndarray, frame_number: int | None=None) -> None:
     try:
-        if not DEBUG_FLAG or img is None:
-            return
         out_dir = Path('debug_frames') / 'eval_steps'
         out_dir.mkdir(parents=True, exist_ok=True)
         fname = name
@@ -511,15 +496,11 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
             filtered_dst.append((dx, dy))
         if len(filtered_src) < 4:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.1 frame {frame_number}: skipped (insufficient points for H, n_src={len(filtered_src)})')
             return result
         t_ = time.perf_counter()
         H_mat, _ = cv2.findHomography(np.array(filtered_src, dtype=np.float32), np.array(filtered_dst, dtype=np.float32))
         if H_mat is None:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.1 frame {frame_number}: skipped (findHomography returned None)')
             return result
         result['has_h'] = True
         result['H'] = H_mat.tolist()
@@ -535,8 +516,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
             result['skipped'] = 'red line vertical'
             result['profile']['homography_red_ms'] = (time.perf_counter() - t_) * 1000.0
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.1 frame {frame_number}: skipped (red line vertical); p5={result['p5']} p29={result['p29']}')
             return result
         Ey = y1 + (0.0 - x1) * (dy_line / dx_line)
         Fy = y1 + (float(W_img - 1) - x1) * (dy_line / dx_line)
@@ -548,25 +527,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
         if red_line_y_max < 0 or red_line_y_min > H_img - 1:
             result['skipped'] = 'red line outside image range'
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.1 frame {frame_number}: skipped (red line outside image); Ey={Ey:.1f} Fy={Fy:.1f} red_y=[{red_line_y_min:.1f},{red_line_y_max:.1f}]')
-                out_dir = Path('debug_frames') / 'step4_1'
-                out_dir.mkdir(parents=True, exist_ok=True)
-                out_step41_dil = out_dir / f'frame_{int(frame_number):05d}_step4_1_edge_dilated_line_5_29.png'
-                t_ = time.perf_counter()
-                if cached_edges is not None:
-                    edges = cached_edges
-                else:
-                    edges = compute_frame_canny_edges(frame)
-                try:
-                    dil_k = _kernel_rect_3()
-                except Exception:
-                    dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
-                edge_only_dilated = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-                edge_only_dilated[edges_dilated > 0] = (255, 255, 255)
-                result['profile']['edges_dilate_ms'] = (time.perf_counter() - t_) * 1000.0
-                cv2.imwrite(str(out_step41_dil), edge_only_dilated)
             return result
         t_ = time.perf_counter()
         if cached_edges is not None:
@@ -580,15 +540,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
         edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
         edge_only = None
         edge_only_dilated = None
-        if DEBUG_FLAG:
-            edge_only = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-            edge_only[edges > 0] = (255, 255, 255)
-            edge_only_dilated = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-            edge_only_dilated[edges_dilated > 0] = (255, 255, 255)
-            pt_E_red = (0, int(round(Ey)))
-            pt_F_red = (W_img - 1, int(round(Fy)))
-            cv2.line(edge_only, pt_E_red, pt_F_red, (0, 0, 255), 1)
-            cv2.line(edge_only_dilated, pt_E_red, pt_F_red, (0, 0, 255), 1)
         result['profile']['edges_dilate_ms'] = (time.perf_counter() - t_) * 1000.0
         t_green = time.perf_counter()
         LINE_WIDTH_PX_41 = 10
@@ -683,9 +634,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
             pA = (0, best_aay)
             pB = (W_img - 1, best_bby)
             green_thickness = 3
-            if DEBUG_FLAG and edge_only is not None and (edge_only_dilated is not None):
-                cv2.line(edge_only, pA, pB, (0, 255, 0), green_thickness)
-                cv2.line(edge_only_dilated, pA, pB, (0, 255, 0), green_thickness)
             result['best_aay'] = best_aay
             result['best_bby'] = best_bby
             result['best_white_rate'] = best_rate
@@ -719,14 +667,6 @@ def _step4_1_compute_border_line(*, frame: np.ndarray, ordered_kps: list[list[fl
                     result['kkp29'] = [float(pt[0]), float(pt[1])]
             result['profile']['kkp_intersect_ms'] = (time.perf_counter() - t_kkp) * 1000.0
         result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-        if DEBUG_FLAG:
-            prof = result.get('profile') or {}
-            print(f'[DEBUG] Step 4.1 frame {frame_number}: has_h={result['has_h']} p5={result['p5']} p29={result['p29']} Ey={result.get('Ey')} Fy={result.get('Fy')} best_aay={result.get('best_aay')} best_bby={result.get('best_bby')} best_white_rate={result.get('best_white_rate')} kkp5={result.get('kkp5')} kkp29={result.get('kkp29')} profile: total_ms={prof.get('total_ms') or 0:.2f} edges_dilate_ms={prof.get('edges_dilate_ms') or 0:.2f} homography_red_ms={prof.get('homography_red_ms') or 0:.2f} green_search_ms={prof.get('green_search_ms') or 0:.2f} kkp_intersect_ms={prof.get('kkp_intersect_ms') or 0:.2f}')
-            out_dir = Path('debug_frames') / 'step4_1'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_step41_dil = out_dir / f'frame_{int(frame_number):05d}_step4_1_edge_dilated_line_5_29.png'
-            if edge_only_dilated is not None:
-                cv2.imwrite(str(out_step41_dil), edge_only_dilated)
     except Exception as exc:
         logger.error('Failed Step 4.1 border line compute for frame %s: %s', frame_number, exc)
         result['error'] = str(exc)
@@ -802,8 +742,6 @@ def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: di
                 out[i] = [x, y]
         return out
     use_right = decision == 'right'
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: building H1 (input kps), H2 (input + step4_3 kkps weight 4), H3 (input + step4_1 & step4_3 kkps weight 8 & 4)')
     kps1 = [list(kp) if kp else [0.0, 0.0] for kp in input_kps[:n_tpl]]
     while len(kps1) < n_tpl:
         kps1.append([0.0, 0.0])
@@ -841,40 +779,7 @@ def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: di
     H3 = None
     if len(src3) >= 4:
         H3, _ = cv2.findHomography(np.array(src3, dtype=np.float32), np.array(dst3, dtype=np.float32))
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: H1 valid={H1 is not None}, H2 valid={H2 is not None}, H3 valid={H3 is not None}')
-        input_kp_strs = []
-        for i, kp in enumerate(input_kps[:n_tpl]):
-            if kp and len(kp) >= 2 and (not (abs(float(kp[0])) < 1e-06 and abs(float(kp[1])) < 1e-06)):
-                input_kp_strs.append(f'kp[{i}]=({float(kp[0]):.2f},{float(kp[1]):.2f})')
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: input keypoints (Step 4): {', '.join(input_kp_strs)}')
-        kkp41_strs = []
-        if step4_1:
-            if step4_1.get('kkp5') is not None:
-                a, b = step4_1['kkp5']
-                kkp41_strs.append(f'kkp5=({float(a):.2f},{float(b):.2f})')
-            if step4_1.get('kkp29') is not None:
-                a, b = step4_1['kkp29']
-                kkp41_strs.append(f'kkp29=({float(a):.2f},{float(b):.2f})')
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: kkps from 4.1: {(', '.join(kkp41_strs) if kkp41_strs else 'none')}')
-        kkp43_strs = []
-        if step4_3:
-            if not use_right:
-                if step4_3.get('kkp4') is not None:
-                    a, b = step4_3['kkp4']
-                    kkp43_strs.append(f'kkp4=({float(a):.2f},{float(b):.2f})')
-                if step4_3.get('kkp12') is not None:
-                    a, b = step4_3['kkp12']
-                    kkp43_strs.append(f'kkp12=({float(a):.2f},{float(b):.2f})')
-            else:
-                if step4_3.get('kkp28') is not None:
-                    a, b = step4_3['kkp28']
-                    kkp43_strs.append(f'kkp28=({float(a):.2f},{float(b):.2f})')
-                if step4_3.get('kkp20') is not None:
-                    a, b = step4_3['kkp20']
-                    kkp43_strs.append(f'kkp20=({float(a):.2f},{float(b):.2f})')
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: kkps from 4.3: {(', '.join(kkp43_strs) if kkp43_strs else 'none')}')
-    if TV_AF_EVAL_PARALLEL and (not DEBUG_FLAG):
+    if TV_AF_EVAL_PARALLEL:
         with ThreadPoolExecutor(max_workers=3) as ex:
             f1 = ex.submit(_score_h, H1)
             f2 = ex.submit(_score_h, H2)
@@ -885,54 +790,6 @@ def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: di
         s2 = _score_h(H2)
         s3 = _score_h(H3)
     best_score = max(s1, s2, s3)
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: scores H1={s1:.6f}, H2={s2:.6f}, H3={s3:.6f}')
-        if best_score <= 0.0 or (H1 is None and H2 is None and (H3 is None)):
-            print(f'[DEBUG] Frame {frame_number} - Step 4.9: fallback (best_score={best_score:.6f}, no valid H or all scores 0)')
-        else:
-            which = 'H1' if best_score == s1 and H1 is not None else 'H2' if best_score == s2 and H2 is not None else 'H3'
-            print(f'[DEBUG] Frame {frame_number} - Step 4.9: best={which} score={best_score:.6f}')
-        try:
-            if cached_edges is not None:
-                edges = cached_edges
-            else:
-                edges = compute_frame_canny_edges(frame)
-            try:
-                dil_k = _kernel_rect_3()
-            except Exception:
-                dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
-            edge_dilated_bgr = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-            edge_dilated_bgr[edges_dilated > 0] = (255, 255, 255)
-            template_image = challenge_template()
-            if template_image is not None and template_image.size > 0:
-                out_dir = Path('debug_frames') / 'x'
-                out_dir.mkdir(parents=True, exist_ok=True)
-                opacity = 0.45
-                for label, H_val, kps in [('H1', H1, kps1), ('H2', H2, kps2), ('H3', H3, kps3)]:
-                    if H_val is None:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {frame_number} - Step 4.9: skip {label} image (H is None)')
-                        continue
-                    img = edge_dilated_bgr.copy()
-                    warped = cv2.warpPerspective(template_image, H_val, (W_img, H_img))
-                    img = cv2.addWeighted(img, 1.0 - opacity, warped, opacity, 0)
-                    for i, kp in enumerate(kps):
-                        if not kp or len(kp) < 2:
-                            continue
-                        x, y = (float(kp[0]), float(kp[1]))
-                        if abs(x) < 1e-06 and abs(y) < 1e-06:
-                            continue
-                        ix, iy = (int(round(x)), int(round(y)))
-                        if 0 <= ix < W_img and 0 <= iy < H_img:
-                            cv2.circle(img, (ix, iy), 5, (0, 0, 255), -1)
-                    out_path = out_dir / f'frame_{int(frame_number):05d}_step4_9_{label}.png'
-                    cv2.imwrite(str(out_path), img)
-                    print(f'[DEBUG] Frame {frame_number} - Step 4.9: wrote {out_path.name} (dilate + keypoints + {label} template)')
-            else:
-                print(f'[DEBUG] Frame {frame_number} - Step 4.9: template image empty, skipping H images')
-        except Exception as e:
-            print(f'[DEBUG] Frame {frame_number} - Step 4.9: debug H images failed: {e}')
     if best_score <= 0.0:
         return (None, 0.0)
     if H1 is None and H2 is None and (H3 is None):
@@ -951,9 +808,6 @@ def _step4_9_select_h_and_keypoints(*, input_kps: list[list[float]], step4_1: di
     if best_H is None:
         return (None, 0.0)
     out_kps = _project_and_valid_only(best_H)
-    if DEBUG_FLAG:
-        n_valid = sum((1 for kp in out_kps if kp and len(kp) >= 2 and (0 <= float(kp[0]) < W_img) and (0 <= float(kp[1]) < H_img)))
-        print(f'[DEBUG] Frame {frame_number} - Step 4.9: returning {n_valid} valid keypoints from best {best_label} score={best_score:.6f}')
     return (out_kps, best_score)
 
 def _merge_step4_1_profile_into_parts(step4_1_result: dict[str, Any] | None, parts_ms: dict[str, float] | None) -> None:
@@ -999,8 +853,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
         template_len = len(FOOTBALL_KEYPOINTS_CORRECTED)
         if not ordered_kps or len(ordered_kps) < template_len:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.3 frame {frame_number}: skipped (no/short ordered_kps len={(len(ordered_kps) if ordered_kps else 0)} need>={template_len})')
             return result
         use_right = decision == 'right'
         bottom_idx = 20 if use_right else 12
@@ -1011,8 +863,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
         max_idx_required = 28 if use_right else 12
         if len(ordered_kps) <= max_idx_required:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.3 frame {frame_number}: skipped (ordered_kps len={len(ordered_kps)} <= max_idx_required={max_idx_required})')
             return result
         t_ = time.perf_counter()
         if cached_edges is not None:
@@ -1025,9 +875,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
         edge_dilated_bgr = None
-        if DEBUG_FLAG:
-            edge_dilated_bgr = np.zeros((H_img, W_img, 3), dtype=np.uint8)
-            edge_dilated_bgr[edges_dilated > 0] = (255, 255, 255)
         result['profile']['edges_dilate_ms'] = (time.perf_counter() - t_) * 1000.0
         t_ = time.perf_counter()
         filtered_src: list[tuple[float, float]] = []
@@ -1042,14 +889,10 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             filtered_dst.append((dx, dy))
         if len(filtered_src) < 4:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.3 frame {frame_number}: skipped (insufficient points for H n_src={len(filtered_src)})')
             return result
         H_mat, _ = cv2.findHomography(np.array(filtered_src, dtype=np.float32), np.array(filtered_dst, dtype=np.float32))
         if H_mat is None:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.3 frame {frame_number}: skipped (findHomography returned None)')
             return result
         all_proj = cv2.perspectiveTransform(np.array([[float(p[0]), float(p[1])] for p in FOOTBALL_KEYPOINTS_CORRECTED], dtype=np.float32).reshape(-1, 1, 2), H_mat)
         all_proj_list = [[float(all_proj[i][0][0]), float(all_proj[i][0][1])] for i in range(len(all_proj))]
@@ -1078,30 +921,11 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             pt_C = (int(round(p[0])), int(round(p[1])))
         if pt_A is None or pt_bottom is None or pt_C is None:
             result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Step 4.3 frame {frame_number}: skipped (missing pt_A={pt_A is not None} pt_bottom={pt_bottom is not None} pt_C={pt_C is not None})')
             return result
         x_A, y_A = (pt_A[0], pt_A[1])
         x_bottom, y_bottom = (pt_bottom[0], pt_bottom[1])
         x_C, y_C = (pt_C[0], pt_C[1])
         pt_top = _red_line_pos(idx_top)
-        if DEBUG_FLAG and edge_dilated_bgr is not None:
-            if pt_bottom and pt_A:
-                cv2.line(edge_dilated_bgr, pt_A, pt_bottom, (0, 0, 255), 1)
-            if pt_bottom and pt_C:
-                cv2.line(edge_dilated_bgr, pt_C, pt_bottom, (0, 0, 255), 1)
-            if use_right and len(ordered_kps) > 25:
-                pt_25 = _red_line_pos(25)
-                if pt_top and pt_25:
-                    cv2.line(edge_dilated_bgr, pt_top, pt_25, (0, 0, 255), 1)
-                if pt_25 and pt_A:
-                    cv2.line(edge_dilated_bgr, pt_25, pt_A, (0, 0, 255), 1)
-                elif pt_top and pt_A:
-                    cv2.line(edge_dilated_bgr, pt_top, pt_A, (0, 0, 255), 1)
-            elif pt_top and pt_A:
-                cv2.line(edge_dilated_bgr, pt_top, pt_A, (0, 0, 255), 1)
-            if pt_top and pt_C:
-                cv2.line(edge_dilated_bgr, pt_top, pt_C, (0, 0, 255), 1)
         result['profile']['homography_red_ms'] = (time.perf_counter() - t_) * 1000.0
         t_ = time.perf_counter()
         LINE_WIDTH_PX = 10
@@ -1185,8 +1009,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
         result['profile']['AB_coarse_candidates'] = coarse_candidates
         result['profile']['AB_refine_candidates'] = (a_ref_max - a_ref_min + 1) * (b_ref_max - b_ref_min + 1)
         result['profile']['AB_best_white_rate'] = best_rate
-        if best_rate >= 0.0 and DEBUG_FLAG and (edge_dilated_bgr is not None):
-            cv2.line(edge_dilated_bgr, best_a, best_b, (0, 255, 0), 2)
         t_ = time.perf_counter()
         c_y_min = max(0, y_C - 30)
         c_y_max = min(H_img - 1, y_C + 30)
@@ -1228,9 +1050,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
         result['profile']['CD_coarse_candidates'] = cd_coarse_candidates
         result['profile']['CD_refine_candidates'] = cd_refine_candidates
         result['profile']['CD_best_white_rate'] = best_cd_rate
-        if best_cd_rate >= 0.0 and DEBUG_FLAG and (edge_dilated_bgr is not None):
-            cv2.line(edge_dilated_bgr, best_c, best_d, (0, 255, 0), 2)
-
         def _line_line_intersection(ax: float, ay: float, bx: float, by: float, cx: float, cy: float, dx: float, dy: float) -> tuple[float, float] | None:
             v1x, v1y = (bx - ax, by - ay)
             v2x, v2y = (dx - cx, dy - cy)
@@ -1252,8 +1071,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             x_F, y_F = (float(p_F[0]), float(p_F[1]))
             pt_E = (int(round(x_E)), int(round(y_E)))
             pt_F = (int(round(x_F)), int(round(y_F)))
-            if DEBUG_FLAG and edge_dilated_bgr is not None:
-                cv2.line(edge_dilated_bgr, pt_E, pt_F, (0, 0, 255), 2)
             t_ = time.perf_counter()
             x_E_int, y_E_int = (int(round(x_E)), int(round(y_E)))
             x_F_int, y_F_int = (int(round(x_F)), int(round(y_F)))
@@ -1293,8 +1110,6 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
             best_ef_b = (x_F_int, best_ef_b_y)
             result['profile']['EF_search_ms'] = (time.perf_counter() - t_) * 1000.0
             result['profile']['EF_best_white_rate'] = best_ef_rate
-            if best_ef_rate >= 0.0 and DEBUG_FLAG and (edge_dilated_bgr is not None):
-                cv2.line(edge_dilated_bgr, best_ef_a, best_ef_b, (0, 255, 0), 2)
             ef_ax, ef_ay = (float(best_ef_a[0]), float(best_ef_a[1]))
             ef_bx, ef_by = (float(best_ef_b[0]), float(best_ef_b[1]))
             pt_ef_ab = _line_line_intersection(ef_ax, ef_ay, ef_bx, ef_by, ax, ay, bx, by)
@@ -1311,22 +1126,12 @@ def _step4_3_debug_dilate_and_lines(*, frame: np.ndarray, ordered_kps: list[list
                 result['kkp12'] = [pt_ab_cd[0], pt_ab_cd[1]]
         result['did_line_draw'] = True
         result['profile']['total_ms'] = (time.perf_counter() - t_start) * 1000.0
-        if DEBUG_FLAG:
-            prof = result.get('profile') or {}
-            print(f'[DEBUG] Step 4.3 frame {frame_number}: side={side_label} decision={decision} did_line_draw=True kkp4={result.get('kkp4')} kkp12={result.get('kkp12')} kkp28={result.get('kkp28')} kkp20={result.get('kkp20')} profile: total_ms={prof.get('total_ms') or 0:.2f} edges_dilate_ms={prof.get('edges_dilate_ms') or 0:.2f} homography_red_ms={prof.get('homography_red_ms') or 0:.2f} AB_search_ms={prof.get('AB_search_ms') or 0:.2f} CD_search_ms={prof.get('CD_search_ms') or 0:.2f} EF_search_ms={prof.get('EF_search_ms') or 0:.2f} AB_best_white_rate={prof.get('AB_best_white_rate')} CD_best_white_rate={prof.get('CD_best_white_rate')} EF_best_white_rate={prof.get('EF_best_white_rate')} AB_coarse_candidates={prof.get('AB_coarse_candidates')} AB_refine_candidates={prof.get('AB_refine_candidates')} CD_coarse_candidates={prof.get('CD_coarse_candidates')} CD_refine_candidates={prof.get('CD_refine_candidates')}')
-            out_dir = Path('debug_frames') / 'step4_3'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_step43 = out_dir / f'frame_{int(frame_number):05d}_step4_3_dilate_lines_{side_label}.png'
-            if edge_dilated_bgr is not None:
-                cv2.imwrite(str(out_step43), edge_dilated_bgr)
     except Exception as e:
         logger.error('Step 4.3 failed for frame %s: %s', frame_number, e)
         result['error'] = str(e)
     return result
 
 def _save_four_points_visualization(frame: np.ndarray, four_points: list[int], keypoints: list[list[float]], connections: list[list[int]], frame_number: int, labels: list[int] | None=None) -> None:
-    if not DEBUG_FLAG:
-        return
     try:
         vis_frame = frame.copy()
         selected_indices = set(four_points[:4]) if len(four_points) >= 4 else set()
@@ -1374,8 +1179,6 @@ def _save_four_points_visualization(frame: np.ndarray, four_points: list[int], k
         logger.error('Failed to save four points visualization for frame %s: %s', frame_number, exc)
 
 def _log_error(msg: str, frame_number: int | None, *, log_frame_number: bool) -> None:
-    if not DEBUG_FLAG:
-        return
     global _LAST_ERROR_MSG, _CURRENT_PROGRESS
     error_part = f' | {msg}' if msg else ''
     if error_part != _LAST_ERROR_MSG:
@@ -1563,11 +1366,11 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         _score_profile = bool(TV_KP_PROFILE)
         score_only = bool(score_only)
         source = 'template-projected' if mask_polygons is None else 'file-polygon' if ADD4_POLYGON_USE_JSON else 'incode-polygon'
-        eval_debug_dir: Path | None = mask_debug_dir if mask_debug_dir is not None else Path('debug_frames') / 'eval_debug' if DEBUG_FLAG else None
+        eval_debug_dir: Path | None = mask_debug_dir if mask_debug_dir is not None else None
 
         def _eval_log(score: float, reason: str, scoring_ok: bool) -> None:
             global _eval_table_header_printed
-            if log_context is None or not DEBUG_FLAG:
+            if log_context is None:
                 return
             if not _eval_table_header_printed:
                 _eval_table_header_printed = True
@@ -1615,7 +1418,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             print('[tv][kp_score_profile] score overlap_ms=%.2f bbox_ms=%.2f kp_ms=%.2f outside_ms=%.2f vis_ms=%.2f' % (float(t_score_overlap * 1000.0), float(t_score_bbox * 1000.0), float(t_score_kp * 1000.0), float(t_score_outside * 1000.0), float(t_score_vis * 1000.0)))
 
         def _write_mask_debug_image(value: float, status: str) -> None:
-            if not DEBUG_FLAG or mask_debug_dir is None:
+            if mask_debug_dir is None:
                 return
             if mask_lines_expected is None:
                 return
@@ -1641,7 +1444,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                 pass
 
         def _write_eval_debug_images(status: str, **kwargs: Any) -> None:
-            if not DEBUG_FLAG or eval_debug_dir is None:
+            if eval_debug_dir is None:
                 return
             try:
                 frame_tag = 'na' if frame_number is None else f'{int(frame_number):03d}'
@@ -1692,11 +1495,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             return value
         frame_id_str = f'Frame {frame_number}' if frame_number is not None else 'Frame'
         frame_height, frame_width = frame.shape[:2]
-        if DEBUG_FLAG and log_context is None:
-            print(f'\n[DEBUG] {frame_id_str} - Starting keypoint evaluation')
-            print(f'[DEBUG] {frame_id_str} - Input: template_keypoints={len(template_keypoints)}, frame_keypoints={len(frame_keypoints)}, frame_size=({frame_width}, {frame_height})')
-            valid_kp_indices = [idx for idx, (x, y) in enumerate(frame_keypoints) if not (x == 0 and y == 0) and 0 <= x < frame_width and (0 <= y < frame_height)]
-            print(f'[DEBUG] {frame_id_str} - Valid keypoints: {len(valid_kp_indices)}/{len(frame_keypoints)} - indices: {valid_kp_indices}')
         t_step = time.perf_counter() if _score_profile else 0.0
         original_keypoints = frame_keypoints[:]
         if _normalize_keypoints_cy is not None:
@@ -1714,10 +1512,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     frame_keypoints.append((0, 0))
                 else:
                     frame_keypoints.append((xf, yf))
-        if DEBUG_FLAG and log_context is None:
-            clamped_count = sum((1 for orig, new in zip(original_keypoints, frame_keypoints) if orig != (0, 0) and new == (0, 0)))
-            if clamped_count > 0:
-                print(f'[DEBUG] {frame_id_str} - Step 0: Clamped {clamped_count} out-of-bounds keypoints to (0, 0)')
         if _score_profile:
             t_val_clamp += time.perf_counter() - t_step
         if not score_only:
@@ -1726,8 +1520,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             for blacklist in BLACKLISTS:
                 if non_idx_set.issubset(blacklist):
                     if _both_points_same_direction(frame_keypoints[blacklist[0] - 1], frame_keypoints[blacklist[1] - 1], frame_width, frame_height):
-                        if DEBUG_FLAG and log_context is None:
-                            print(f'[DEBUG] {frame_id_str} - Step 0.5: Suspect keypoints detected (blacklist match)! Returning 0.0')
                         if log_context is not None:
                             tf_idx = log_context.get('transform_idx', -1)
                             pair_str = ','.join((str(i) for i in log_context.get('pair_indices', [])))
@@ -1768,7 +1560,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         if warped_template is None and homography_matrix is None:
             t_step = time.perf_counter() if _score_profile else 0.0
             try:
-                if mask_polygons is not None and (not DEBUG_FLAG):
+                if mask_polygons is not None:
                     filtered_src: list[tuple[int, int]] = []
                     filtered_dst: list[tuple[float, float]] = []
                     for src_pt, dst_pt in zip(template_keypoints, frame_keypoints, strict=True):
@@ -1798,19 +1590,11 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     else:
                         warped_template, homography_matrix = project_image_using_keypoints(image=floor_markings_template, source_keypoints=template_keypoints, destination_keypoints=frame_keypoints, destination_width=frame_width, destination_height=frame_height, return_h=True)
             except ValueError as e:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 1-3: Projection failed: {e}')
                 return _score_profile_return(0.0, 'proj_fail')
             except InvalidMask as e:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 1-3: Projection failed: {e}')
                 return _score_profile_return(0.0, 'proj_invalid')
             if _score_profile:
                 t_val_project += time.perf_counter() - t_step
-        if DEBUG_FLAG and log_context is None and (mask_debug_dir is None):
-            _save_step('step1_warped_template', warped_template, frame_number)
-        if DEBUG_FLAG and log_context is None:
-            print(f'[DEBUG] {frame_id_str} - Step 4: Extracting ground and line masks from warped template')
         if mask_ground_bin is None or mask_lines_expected is None:
             t_step = time.perf_counter() if _score_profile else 0.0
             try:
@@ -1836,12 +1620,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                         if REFINE_EXPECTED_MASKS_AT_BOUNDARIES:
                             tpl = floor_markings_template if floor_markings_template is not None else challenge_template()
                             if tpl is not None:
-                                if DEBUG_FLAG and log_context is None:
-                                    rough_line_mask = mask_lines_expected.copy()
-                                    _save_step('debug_rough_line_mask', rough_line_mask * 255, frame_number)
-                                    _save_step('debug_rough_line_mask_edges_red', _debug_mask_with_edges_red(rough_line_mask), frame_number)
-                                    _dilation_radius = max(1, int(np.ceil(1.0 / processing_scale)))
-                                    _save_step('debug_rough_line_mask_refine_area_red', _debug_mask_with_refine_area_red(rough_line_mask, _dilation_radius), frame_number)
                                 _t = time.perf_counter() if _score_profile else 0.0
                                 warped_full, _ = project_image_using_keypoints(image=tpl, source_keypoints=template_keypoints, destination_keypoints=frame_keypoints, destination_width=frame_width, destination_height=frame_height, return_h=True)
                                 if _score_profile:
@@ -1850,12 +1628,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                                 mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(warped_full, debug_frame_id=frame_number)
                                 if _score_profile:
                                     t_val_masks_refine_extract += time.perf_counter() - _t
-                                if DEBUG_FLAG and log_context is None:
-                                    _save_step('debug_refined_line_mask', mask_lines_expected * 255, frame_number)
-                                    _save_step('debug_fullres_line_mask', mask_lines_expected * 255, frame_number)
             except InvalidMask as e:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 4: Mask validation failed: {e}')
                 return _score_profile_return(0.0, 'mask_fail', error_msg=str(e), warped_template=warped_template)
             if use_cache:
                 _KP_WARP_CACHE[cache_key] = (warped_template, mask_ground_bin, mask_lines_expected)
@@ -1864,11 +1637,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                     _KP_WARP_CACHE.popitem(last=False)
             if _score_profile:
                 t_val_masks += time.perf_counter() - t_step
-        if DEBUG_FLAG and mask_debug_dir is None:
-            _save_step('step2_mask_ground', mask_ground_bin * 255, frame_number)
-            _save_step('step2_mask_ground_edges_red', _debug_mask_with_edges_red(mask_ground_bin), frame_number)
-            _save_step('step3_mask_lines_expected', mask_lines_expected * 255, frame_number)
-            _save_step('step3_mask_lines_expected_edges_red', _debug_mask_with_edges_red(mask_lines_expected), frame_number)
         t_step = time.perf_counter() if _score_profile else 0.0
         if mask_polygons is not None:
             edges = cached_edges
@@ -1892,8 +1660,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                         _KP_PRED_CACHE.popitem(last=False)
         if _score_profile:
             t_val_pred += time.perf_counter() - t_step
-        if DEBUG_FLAG and mask_debug_dir is None:
-            _save_step('step4_mask_lines_predicted', mask_lines_predicted * 255, frame_number)
         t_step = time.perf_counter() if _score_profile else 0.0
         pixels_overlapping_result = cv2.bitwise_and(mask_lines_expected, mask_lines_predicted)
         if _score_profile:
@@ -1902,8 +1668,6 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             t_step = time.perf_counter() if _score_profile else 0.0
             pts = cv2.findNonZero(mask_lines_expected)
             if pts is None or len(pts) == 0:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: No expected lines found, returning 0.0')
                 return _score_profile_return(0.0, 'no_expected')
             else:
                 min_x, min_y, w_box, h_box = cv2.boundingRect(pts)
@@ -1912,31 +1676,20 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
                 bbox = (int(min_x), int(min_y), int(max_x), int(max_y))
             bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             frame_area = frame_height * frame_width
-            if DEBUG_FLAG and log_context is None:
-                bbox_ratio = bbox_area / frame_area if frame_area > 0 else 0.0
-                print(f'[DEBUG] {frame_id_str} - Step 6: Bounding box area ratio={bbox_ratio:.4f} (bbox_area={bbox_area}, frame_area={frame_area})')
             if bbox_area / frame_area < 0.2:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: Bounding box area too small ({bbox_area / frame_area:.4f} < 0.2), returning 0.0')
                 return _score_profile_return(0.0, 'bbox_small')
             if _score_profile:
                 t_score_bbox += time.perf_counter() - t_step
             t_step = time.perf_counter() if _score_profile else 0.0
             valid_keypoints = [(x, y) for x, y in frame_keypoints if not (x == 0 and y == 0)]
             if not valid_keypoints:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: No valid keypoints found, returning 0.0')
                 return _score_profile_return(0.0, 'no_valid_kp')
             xs, ys = zip(*valid_keypoints)
             min_x_kp, max_x_kp = (min(xs), max(xs))
             min_y_kp, max_y_kp = (min(ys), max(ys))
             if max_x_kp < 0 or max_y_kp < 0 or min_x_kp >= frame_width or (min_y_kp >= frame_height):
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: All keypoints are outside the frame, returning 0.0')
                 return _score_profile_return(0.0, 'kp_outside2')
             if max_x_kp - min_x_kp > 2 * frame_width or max_y_kp - min_y_kp > 2 * frame_height:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: Keypoints spread too wide (width={max_x_kp - min_x_kp}, height={max_y_kp - min_y_kp}), returning 0.0')
                 return _score_profile_return(0.0, 'kp_spread2')
             if _score_profile:
                 t_score_kp += time.perf_counter() - t_step
@@ -1944,15 +1697,9 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
             inv_expected = cv2.bitwise_not(mask_lines_expected)
             pixels_rest = cv2.bitwise_and(inv_expected, mask_lines_predicted).sum()
             total_pixels = cv2.bitwise_or(mask_lines_expected, mask_lines_predicted).sum()
-            if DEBUG_FLAG and log_context is None:
-                print(f'[DEBUG] {frame_id_str} - Step 6: Predicted lines outside expected: {pixels_rest} pixels, Total pixels: {total_pixels}')
             if total_pixels == 0:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: No total pixels found, returning 0.0')
                 return _score_profile_return(0.0, 'total_zero')
             if pixels_rest / total_pixels > 0.9:
-                if DEBUG_FLAG and log_context is None:
-                    print(f'[DEBUG] {frame_id_str} - Step 6: Too many predicted lines outside expected ({pixels_rest / total_pixels:.4f} > 0.9), returning 0.0')
                 return _score_profile_return(0.0, 'outside_ratio')
             if _score_profile:
                 t_score_outside += time.perf_counter() - t_step
@@ -1965,13 +1712,7 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         overlap_ratio = float(pixels_overlapping) / float(pixels_on_lines + 1e-08)
         if _score_profile:
             t_score_overlap += time.perf_counter() - t_step
-        if DEBUG_FLAG and log_context is None:
-            print(f'[DEBUG] {frame_id_str} - Step 6: Overlap pixels={pixels_overlapping}, Expected lines pixels={pixels_on_lines}, Ratio={overlap_ratio:.4f}')
         t_step = time.perf_counter() if _score_profile else 0.0
-        if DEBUG_FLAG and mask_debug_dir is None:
-            overlap_vis = cv2.cvtColor((mask_lines_expected * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
-            overlap_vis[..., 1] = np.where(mask_lines_predicted > 0, 255, overlap_vis[..., 1])
-            _save_step('step5_overlap_expected_red_predicted_green', overlap_vis, frame_number)
         if _score_profile:
             t_score_vis += time.perf_counter() - t_step
         logger.info('[evaluate_keypoints_for_frame] frame=%s overlap=%d expected_lines=%d ratio=%.6f', frame_number, int(pixels_overlapping), int(pixels_on_lines), overlap_ratio)
@@ -1985,38 +1726,18 @@ def evaluate_keypoints_for_frame(template_keypoints: list[tuple[int, int]], fram
         _write_mask_debug_image(float(overlap_ratio), 'ok')
         return overlap_ratio
     except Exception as e:
-        if log_context is not None and DEBUG_FLAG:
-            global _eval_table_header_printed
-            if not _eval_table_header_printed:
-                _eval_table_header_printed = True
-                print('  | transform     | pair                     | source          | scoring | Validation | Score   | Zero-score Reason |')
-                print('  |---------------|--------------------------|-----------------|---------|------------|--------|-------------------|')
-            _eval_log_ctx = {'transform_idx': log_context.get('transform_idx', -1), 'pair_indices': log_context.get('pair_indices', [])}
-            _src = 'template-projected' if mask_polygons is None else 'file-polygon' if ADD4_POLYGON_USE_JSON else 'incode-polygon'
-            _pair_str = ','.join((str(i) for i in _eval_log_ctx['pair_indices']))
-            _tf = f'transform[{_eval_log_ctx['transform_idx']}]'
-            _pair = f'pair [{_pair_str}]'
-            print(f'  | {_tf:<13} | {_pair:<24} | {_src:<15} | False   | {str(not score_only):<10} | 0.0000 | {'exception':<17} |')
-        if DEBUG_FLAG and log_context is None:
-            print(f'[DEBUG] {(frame_id_str if 'frame_id_str' in locals() else 'Frame')} - ERROR: Exception in evaluate_keypoints_for_frame: {e}')
+        pass
     return _score_profile_return(0.0, 'exception')
 
 def _step5_validate_ordered_keypoints(*, ordered_kps: list[list[float]], frame: np.ndarray, template_image: np.ndarray, template_keypoints: list[tuple[int, int]], frame_number: int, best_meta: dict[str, Any], debug_label: str | None=None, cached_edges: np.ndarray | None=None) -> tuple[bool, str | None, list[list[float]]]:
     validation_passed = False
     validation_error: str | None = None
-    if DEBUG_FLAG:
-        suffix = f' ({debug_label})' if debug_label else ''
-        print(f'[DEBUG] Frame {frame_number} - Step 5: Validating keypoints from Step 4.9{suffix}')
-        valid_count = sum((1 for kp in ordered_kps if kp and len(kp) >= 2 and (not (abs(kp[0]) < 1e-06 and abs(kp[1]) < 1e-06))))
-        print(f'[DEBUG] Frame {frame_number} - Step 5: Input - {valid_count}/{len(ordered_kps)} valid keypoints')
     try:
         if len(ordered_kps) < 4:
             raise ValueError('At least 4 valid keypoints are required.')
         if len(ordered_kps) != len(template_keypoints):
             raise ValueError(f'Keypoint count mismatch (expected {len(template_keypoints)}, got {len(ordered_kps)})')
         frame_height, frame_width = frame.shape[:2]
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 5: Frame size - {frame_width}x{frame_height}')
         frame_keypoints_tuples: list[tuple[float, float]] = []
         clamped_count = 0
         for idx, kp in enumerate(ordered_kps):
@@ -2025,47 +1746,28 @@ def _step5_validate_ordered_keypoints(*, ordered_kps: list[list[float]], frame: 
                 if (x, y) != (0, 0) and (x < 0 or y < 0 or x >= frame_width or (y >= frame_height)):
                     frame_keypoints_tuples.append((0, 0))
                     clamped_count += 1
-                    if DEBUG_FLAG:
-                        print(f'[DEBUG] Frame {frame_number} - Step 5: Clamped keypoint[{idx}] from ({x:.2f}, {y:.2f}) to (0, 0)')
                 else:
                     frame_keypoints_tuples.append((x, y))
             else:
                 frame_keypoints_tuples.append((0, 0))
-        if DEBUG_FLAG and clamped_count > 0:
-            print(f'[DEBUG] Frame {frame_number} - Step 5: Clamped {clamped_count} out-of-bounds keypoints')
         score = best_meta.get('score', 0.0)
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 5: Score from Step 4.9 = {score:.6f}')
         if score > 0.0:
             validation_passed = True
             if clamped_count > 0:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Step 5: Updating ordered_kps with {clamped_count} clamped keypoints')
                 for idx, clamped_kp in enumerate(frame_keypoints_tuples):
                     if idx < len(ordered_kps):
                         ordered_kps[idx] = [float(clamped_kp[0]), float(clamped_kp[1])]
                 best_meta['reordered_keypoints'] = ordered_kps
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number} - Step 5: PASSED score={score:.6f}')
         else:
             validation_error = f'Score validation failed: score={score:.6f}'
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number} - Step 5: FAILED {validation_error}')
     except ValueError as e:
         validation_error = str(e)
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 5: FAILED (ValueError): {validation_error}')
     except Exception as e:
         validation_error = f'Unexpected error: {str(e)}'
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 5: FAILED (Exception): {validation_error}')
     return (validation_passed, validation_error, ordered_kps)
 
 def _step6_fill_keypoints_from_homography(*, ordered_kps: list[list[float]], frame: np.ndarray, frame_number: int) -> list[list[float]]:
     frame_height, frame_width = frame.shape[:2]
-    if DEBUG_FLAG:
-        valid_count = sum((1 for kp in ordered_kps if kp and len(kp) >= 2 and (not (abs(kp[0]) < 1e-06 and abs(kp[1]) < 1e-06))))
-        print(f'[DEBUG] Frame {frame_number} - Step 6: Starting keypoint filling - {valid_count}/{len(ordered_kps)} valid keypoints, frame size {frame_width}x{frame_height}')
     valid_src_points: list[tuple[int, int]] = []
     valid_dst_points: list[tuple[int, int]] = []
     valid_indices: list[int] = []
@@ -2078,18 +1780,12 @@ def _step6_fill_keypoints_from_homography(*, ordered_kps: list[list[float]], fra
                 valid_dst_points.append((int(x), int(y)))
                 valid_indices.append(idx)
     if len(valid_src_points) < 4:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 6: SKIPPED - insufficient valid keypoints ({len(valid_src_points)} < 4)')
         return ordered_kps
     source_points = np.array(valid_src_points, dtype=np.float32)
     destination_points = np.array(valid_dst_points, dtype=np.float32)
     H, _ = cv2.findHomography(source_points, destination_points)
     if H is None:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 6: SKIPPED - homography computation failed')
         return ordered_kps
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 6: Homography computed from {len(valid_src_points)} keypoints')
     all_template_points = np.array(FOOTBALL_KEYPOINTS_CORRECTED, dtype=np.float32).reshape(-1, 1, 2)
     projected_points = cv2.perspectiveTransform(all_template_points, H)
     projected_points = projected_points.reshape(-1, 2)
@@ -2113,9 +1809,6 @@ def _step6_fill_keypoints_from_homography(*, ordered_kps: list[list[float]], fra
     else:
         filled_count = 0
         out_of_bounds_count = 0
-    if DEBUG_FLAG:
-        total_valid_after = _count_valid_keypoints(updated_kps)
-        print(f'[DEBUG] Frame {frame_number} - Step 6: Filled {filled_count} keypoints, {out_of_bounds_count} out-of-bounds set to [0,0], total valid after: {total_valid_after}/{len(updated_kps)}')
     return updated_kps
 
 def _step1_build_connections(*, frame: np.ndarray, kps: list[list[float]] | list[Any], labels: list[int], frame_number: int, frame_width: int, frame_height: int, cached_edges: np.ndarray | None=None) -> dict[str, Any]:
@@ -2190,10 +1883,6 @@ def _step2_build_four_point_groups(*, frame: np.ndarray, step1_entry: dict[str, 
     valid_nodes = {idx_v for idx_v, pt in enumerate(keypoints) if pt is not None and len(pt) >= 2 and (not (abs(pt[0]) < 1e-06 and abs(pt[1]) < 1e-06)) and (float(pt[0]) >= border_margin) and (float(pt[0]) < frame_width - border_margin) and (float(pt[1]) >= border_margin) and (float(pt[1]) < frame_height - border_margin)}
     edge_set: set[tuple[int, int]] = {tuple(sorted((int(a), int(b)))) for a, b in connections if int(a) in valid_nodes and int(b) in valid_nodes}
     candidate_nodes = sorted(valid_nodes)
-    if DEBUG_FLAG:
-        total_valid = sum((1 for _idx_v, pt in enumerate(keypoints) if pt is not None and len(pt) >= 2 and (not (abs(pt[0]) < 1e-06 and abs(pt[1]) < 1e-06))))
-        border_excluded = total_valid - len(valid_nodes)
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Valid nodes: {len(valid_nodes)}/{total_valid} (excluded {border_excluded} points within {border_margin}px border)')
     deg: dict[int, int] = {int(i): 0 for i in candidate_nodes}
     for a, b in edge_set:
         deg[int(a)] = deg.get(int(a), 0) + 1
@@ -2286,11 +1975,6 @@ def _step2_build_four_point_groups(*, frame: np.ndarray, step1_entry: dict[str, 
     total_combos = 0
     skipped_collinear = 0
     matching_groups: list[tuple[int, list[int]]] = []
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Starting four-point selection')
-        print(f'[DEBUG] Frame {frame_number} - Step 2: candidate_nodes={len(candidate_nodes)}, edge_set size={len(edge_set)}')
-        points_with_connections = sum((1 for idx in candidate_nodes if deg.get(int(idx), 0) > 0))
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Points with connections: {points_with_connections}/{len(candidate_nodes)}')
     for combo in combinations(candidate_nodes, 4):
         total_combos += 1
         a, b, c, d = (combo[0], combo[1], combo[2], combo[3])
@@ -2299,11 +1983,6 @@ def _step2_build_four_point_groups(*, frame: np.ndarray, step1_entry: dict[str, 
             continue
         points_with_conn_count = int(deg.get(int(a), 0) > 0) + int(deg.get(int(b), 0) > 0) + int(deg.get(int(c), 0) > 0) + int(deg.get(int(d), 0) > 0)
         matching_groups.append((points_with_conn_count, [int(a), int(b), int(c), int(d)]))
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Total combinations: {total_combos}')
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Skipped (collinear): {skipped_collinear}')
-        print(f'[DEBUG] Frame {frame_number} - Step 2: Valid groups found: {len(matching_groups)}')
-
     def _calculate_group_difference(group1: list[int], group2: list[int]) -> int:
         set1 = set(group1)
         set2 = set(group2)
@@ -2330,19 +2009,7 @@ def _step2_build_four_point_groups(*, frame: np.ndarray, step1_entry: dict[str, 
             if is_different or len(selected_groups) == 0:
                 selected_groups.append((conn_count, group))
                 four_point_groups.append(group)
-        if DEBUG_FLAG:
-            if len(four_point_groups) > 0:
-                best_conn_count, best_group = selected_groups[0]
-                best_spread = _spread_score_min_pair_distance(int(best_group[0]), int(best_group[1]), int(best_group[2]), int(best_group[3]), keypoints)
-                print(f'[DEBUG] Frame {frame_number} - Step 2: Selected {len(four_point_groups)} group(s)')
-                print(f'[DEBUG] Frame {frame_number} - Step 2: Group 1: {best_group}, connections: {best_conn_count}/4, spread_score: {best_spread:.2f}')
-                for idx, (conn_count, group) in enumerate(selected_groups[1:], start=2):
-                    spread = _spread_score_min_pair_distance(int(group[0]), int(group[1]), int(group[2]), int(group[3]), keypoints)
-                    diff_from_first = _calculate_group_difference(group, best_group)
-                    print(f'[DEBUG] Frame {frame_number} - Step 2: Group {idx}: {group}, connections: {conn_count}/4, spread_score: {spread:.2f}, diff from group 1: {diff_from_first} points')
     else:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 2: No valid four-point group found with strict criteria, trying fallback...')
         fallback_groups: list[list[int]] = []
         for combo in combinations(candidate_nodes, 4):
             a, b, c, d = (combo[0], combo[1], combo[2], combo[3])
@@ -2371,24 +2038,6 @@ def _step2_build_four_point_groups(*, frame: np.ndarray, step1_entry: dict[str, 
                 if is_different or len(selected_fallback_groups) == 0:
                     selected_fallback_groups.append((conn_count, group))
                     four_point_groups.append(group)
-            if DEBUG_FLAG:
-                if len(selected_fallback_groups) > 0:
-                    best_conn_count, best_group = selected_fallback_groups[0]
-                    best_spread = _spread_score_min_pair_distance(int(best_group[0]), int(best_group[1]), int(best_group[2]), int(best_group[3]), keypoints)
-                    print(f'[DEBUG] Frame {frame_number} - Step 2: Fallback selected {len(selected_fallback_groups)} group(s)')
-                    print(f'[DEBUG] Frame {frame_number} - Step 2: Fallback Group 1: {best_group}, spread_score: {best_spread:.2f}, connections: {best_conn_count}/4')
-                    for idx, (conn_count, group) in enumerate(selected_fallback_groups[1:], start=2):
-                        spread = _spread_score_min_pair_distance(int(group[0]), int(group[1]), int(group[2]), int(group[3]), keypoints)
-                        diff_from_first = _calculate_group_difference(group, best_group)
-                        print(f'[DEBUG] Frame {frame_number} - Step 2: Fallback Group {idx}: {group}, spread_score: {spread:.2f}, connections: {conn_count}/4, diff from group 1: {diff_from_first} points')
-        elif DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Step 2: No valid four-point group found even with fallback!')
-            if len(candidate_nodes) < 4:
-                print(f'[DEBUG] Frame {frame_number} - Step 2: Not enough candidate nodes ({len(candidate_nodes)} < 4)')
-            else:
-                print(f'[DEBUG] Frame {frame_number} - Step 2: All combinations were severely collinear (within 5px)')
-    if DEBUG_FLAG and four_point_groups and (len(four_point_groups) > 0):
-        _save_four_points_visualization(frame, four_point_groups[0], keypoints, step1_entry['connections'], frame_number, labels=labels)
     return {'frame_id': step1_entry['frame_id'], 'frame_size': step1_entry['frame_size'], 'connections': sorted([list(edge) for edge in edge_set]), 'keypoints': keypoints, 'labels': labels, 'four_points': four_point_groups}
 
 def _step3_build_ordered_candidates(*, step2_entry: dict[str, Any], template_patterns: dict[tuple[bool, ...], list[list[int]]], template_patterns_allowed_left: dict[tuple[bool, ...], list[list[int]]] | None=None, template_patterns_allowed_right: dict[tuple[bool, ...], list[list[int]]] | None=None, template_labels: list[int], frame_number: int) -> dict[str, Any]:
@@ -2874,8 +2523,6 @@ def _step3_build_ordered_candidates(*, step2_entry: dict[str, Any], template_pat
             else:
                 candidates = [cand for cand in candidates if _check_connection_label_constraints(cand, quad)]
                 cand_arr = None
-            if DEBUG_FLAG and before_label_conn > len(candidates):
-                print(f'[DEBUG] Frame {frame_number} - Step 3: Connection label constraints reduced candidates from {before_label_conn} to {len(candidates)}')
             before_conn = len(candidates)
             quad4 = quad[:4]
             use_cy_conn = False
@@ -2893,11 +2540,6 @@ def _step3_build_ordered_candidates(*, step2_entry: dict[str, Any], template_pat
             else:
                 candidates = [cand for cand in candidates if _check_connection_constraints(cand, quad)]
                 cand_arr = None
-            if DEBUG_FLAG:
-                if before_conn > len(candidates):
-                    print(f'[DEBUG] Frame {frame_number} - Step 3: Connection constraints reduced candidates from {before_conn} to {len(candidates)}')
-                else:
-                    print(f'[DEBUG] Frame {frame_number} - Step 3: Connection constraints: {before_conn} candidates, none rejected')
             filtered: list[list[int]] = []
             for cand in candidates:
                 cand_seq = list(cand) if isinstance(cand, tuple) else cand
@@ -2936,8 +2578,6 @@ def _step4_pick_best_candidate(*, matches: list[dict[str, Any]], orig_kps: list[
     good_candidate_found = False
     for match_idx, match in enumerate(matches):
         if good_candidate_found:
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number} - Step 4: Skipping match {match_idx} (good candidate already found)')
             break
         match_best_avg = float('inf')
         match_best_meta: dict[str, Any] | None = None
@@ -2961,82 +2601,47 @@ def _step4_pick_best_candidate(*, matches: list[dict[str, Any]], orig_kps: list[
         candidates_to_eval = candidates[:STEP4_MAX_CANDIDATES] if len(candidates) > STEP4_MAX_CANDIDATES else candidates
         total_candidates = len(candidates)
         eval_count = len(candidates_to_eval)
-        if DEBUG_FLAG:
-            if total_candidates > eval_count:
-                print(f'\n[DEBUG] Frame {frame_number}, match {match_idx}, four_points: {four_points[:4]}, evaluating {eval_count}/{total_candidates} candidates (limited)')
-            else:
-                print(f'\n[DEBUG] Frame {frame_number}, match {match_idx}, four_points: {four_points[:4]}, evaluating {eval_count} candidates')
         for cand_idx, cand in enumerate(candidates_to_eval):
             if len(cand) < 4:
-                if DEBUG_FLAG:
-                    print(f'\n[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {(cand[:4] if cand else [])} -> SKIPPED: len < 4')
                 continue
             src_pts = _FOOTBALL_KEYPOINTS_NP[np.asarray(cand[:4], dtype=np.int32)].reshape(1, 4, 2)
             H, _mask = cv2.findHomography(src_pts, dst_pts, method=cv2.RANSAC)
             if not _is_valid_homography(H):
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> SKIPPED: invalid homography')
                 continue
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> homography valid, checking bowtie...')
             projected_corners = cv2.perspectiveTransform(_FOOTBALL_CORNERS_NP, H)[0]
             if _is_bowtie(projected_corners):
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> SKIPPED: bowtie detected')
                 continue
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> no bowtie, computing avg_distance...')
             projected = cv2.perspectiveTransform(template_pts, H)
             avg_dist, _nearest_d, reordered, orig_idx_map = _avg_distance_to_projection(orig_kps, projected, orig_labels=frame_labels, template_labels=KEYPOINT_LABELS)
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> avg_distance: {avg_dist:.2f}, validating y-ordering...')
             is_valid_y_ordering, violation_msg = _validate_y_ordering(reordered, debug_frame_id=frame_number, debug_candidate=cand[:4] if len(cand) >= 4 else [])
             if not is_valid_y_ordering:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> SKIPPED: {violation_msg}')
                 continue
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number}, match {match_idx}, candidate {cand_idx}: {cand[:4]} -> y-ordering valid, avg_distance: {avg_dist:.2f}')
             if avg_dist < match_best_avg:
                 match_best_avg = avg_dist
                 match_best_meta = {'frame_id': int(frame_number), 'match_idx': match_idx, 'candidate_idx': cand_idx, 'candidate': [int(x) for x in cand], 'avg_distance': avg_dist, 'reordered_keypoints': reordered, 'decision': decision, 'added_four_point': False}
                 match_best_orig_idx_map = orig_idx_map
             if match_best_avg < STEP4_EARLY_TERMINATE_THRESHOLD:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Match {match_idx}: Found excellent candidate with avg_distance {match_best_avg:.2f}, stopping this match')
                 good_candidate_found = True
                 break
         if match_best_meta is not None and match_best_avg < best_avg:
             best_avg = match_best_avg
             best_meta = match_best_meta
             best_orig_idx_map = locals().get('match_best_orig_idx_map')
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number} - Match {match_idx}: Updated best candidate with avg_distance {best_avg:.2f}')
         if match_best_meta is not None and match_best_avg < STEP4_GOOD_CANDIDATE_THRESHOLD:
             good_candidate_found = True
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_number} - Step 4: Found good candidate (avg_distance {match_best_avg:.2f} < {STEP4_GOOD_CANDIDATE_THRESHOLD}) from match {match_idx}, stopping')
             break
         elif match_idx == 0:
             if match_best_meta is None:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Step 4: No candidate found in match 0, will try next match')
+                pass
             elif match_best_avg >= STEP4_GOOD_CANDIDATE_THRESHOLD:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Step 4: Found candidate in match 0 but avg_distance {match_best_avg:.2f} >= {STEP4_GOOD_CANDIDATE_THRESHOLD}, will try next match')
+                pass
         elif match_idx == 1:
             if match_best_meta is None:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Step 4: No candidate found in match 1, will try match 2')
+                pass
             elif match_best_avg >= STEP4_GOOD_CANDIDATE_THRESHOLD:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {frame_number} - Step 4: Found candidate in match 1 but avg_distance {match_best_avg:.2f} >= {STEP4_GOOD_CANDIDATE_THRESHOLD}, will try match 2')
+                pass
     if best_meta and best_avg > 60:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_number} - Rejecting all candidates: min avg_distance {best_avg:.2f} > 60')
         best_meta = None
-    if DEBUG_FLAG and best_meta:
-        print(f'[DEBUG] Frame {frame_number} - Selected candidate {best_meta['candidate_idx']}: {best_meta['candidate']} with avg_distance: {best_meta['avg_distance']:.2f}')
     return (best_avg, best_meta, best_orig_idx_map)
 
 def _ordered_keypoints_to_labeled(ordered_kps: list[list[float]], template_len: int) -> list[dict[str, Any]]:
@@ -3059,86 +2664,22 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
     best_meta_prev = prev_best_meta
     if prev_valid_frame_id is not None and prev_valid_frame_id != fn - 1:
         best_meta_prev = None
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} - Skipping similarity check: prev_valid_frame_id ({prev_valid_frame_id}) is not immediately previous frame ({fn - 1})')
     if not PREV_RELATIVE_FLAG:
         best_meta_prev = None
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} - Skipping similarity check: PREV_RELATIVE_FLAG is disabled')
     if best_meta_prev is not None:
         prev_ordered_kps = best_meta_prev.get('reordered_keypoints')
         if prev_ordered_kps and isinstance(prev_ordered_kps, list):
             labeled_ref = _ordered_keypoints_to_labeled(prev_ordered_kps, template_len)
-            if DEBUG_FLAG and labeled_ref:
-                print(f'[DEBUG] Frame {fn} - Similarity check: Converted {len(labeled_ref)} valid keypoints from previous frame {prev_valid_frame_id} ordered keypoints')
     if labeled_ref is not None and best_meta_prev is not None:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} - Similarity check: Comparing with previous frame {prev_valid_frame_id}')
         _avg_dist, _match_count, matches = _avg_distance_same_label(labeled_cur, labeled_ref)
         valid_cur = [idx_lab for idx_lab, item in enumerate(labeled_cur) if item.get('x') is not None and item.get('y') is not None and (item.get('label') is not None)]
         common_matches = [(cur_idx, prev_idx, dist) for cur_idx, prev_idx, dist in matches if dist != float('inf')]
-        if DEBUG_FLAG:
-            max_dist = max((dist for _, _, dist in common_matches), default=0.0) if common_matches else 0.0
-            print(f'[DEBUG] Frame {fn} - Similarity check: valid_cur={(len(valid_cur) if valid_cur else 0)}, common_matches={len(common_matches)}, max_dist={max_dist:.2f}, prev_best_meta={('exists' if best_meta_prev else 'None')}')
-            if common_matches:
-                print(f'[DEBUG] Frame {fn} - Matching keypoints (total: {len(common_matches)}):')
-                for cur_idx, prev_idx, dist in sorted(common_matches, key=lambda x: x[2], reverse=True):
-                    cur_item = labeled_cur[cur_idx] if 0 <= cur_idx < len(labeled_cur) else None
-                    prev_item = labeled_ref[prev_idx] if 0 <= prev_idx < len(labeled_ref) else None
-                    cur_id = cur_item.get('id') if cur_item else '?'
-                    cur_label = cur_item.get('label') if cur_item else '?'
-                    cur_x = cur_item.get('x') if cur_item else '?'
-                    cur_y = cur_item.get('y') if cur_item else '?'
-                    prev_id = prev_item.get('id') if prev_item else '?'
-                    prev_x = prev_item.get('x') if prev_item else '?'
-                    prev_y = prev_item.get('y') if prev_item else '?'
-                    status = 'OK' if dist < 30.0 else 'LARGE'
-                    print(f'  [DEBUG]   [{status}] ID {cur_id} (label {cur_label}): cur[{cur_idx}] at ({cur_x:.1f}, {cur_y:.1f}) -> prev[{prev_idx}] (ID {prev_id}) at ({prev_x:.1f}, {prev_y:.1f}), dist={dist:.2f}px')
         prev_score = best_meta_prev.get('score')
         prev_score_ok = prev_score is not None and float(prev_score) >= SIMILARITY_MIN_SCORE_THRESHOLD
         if len(common_matches) >= 3 and all((dist < 30.0 for _, _, dist in common_matches)) and prev_score_ok:
             similar_frame = True
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {fn} - Similarity check PASSED, reusing previous frame order')
-                print(f'[DEBUG] Frame {fn} - Similarity check criteria:')
-                print(f'[DEBUG]   - common_matches ({len(common_matches)}) >= 3: ✓')
-                print(f'[DEBUG]   - all distances < 30.0px: ✓')
-                print(f'[DEBUG]   - prev_best_meta exists: {('✓' if best_meta_prev is not None else '✗')}')
-                prev_score_dbg = best_meta_prev.get('score')
-                print(f'[DEBUG]   - prev_score ({prev_score_dbg}) >= {SIMILARITY_MIN_SCORE_THRESHOLD}: {('✓' if prev_score_ok else '✗')}')
-        elif DEBUG_FLAG:
-            reasons = []
-            if len(common_matches) < 3:
-                reasons.append(f'common_matches ({len(common_matches)}) < 3')
-            elif not all((dist < 30.0 for _, _, dist in common_matches)):
-                max_dist = max((dist for _, _, dist in common_matches), default=0.0)
-                reasons.append(f'max_dist ({max_dist:.2f}) >= 30.0')
-            if not prev_score_ok:
-                prev_score_val = float(prev_score) if prev_score is not None else None
-                reasons.append(f'prev_score ({prev_score_val}) < {SIMILARITY_MIN_SCORE_THRESHOLD}')
-            print(f'[DEBUG] Frame {fn} - Similarity check FAILED: {(', '.join(reasons) if reasons else 'unknown')}')
-            print(f'[DEBUG] Frame {fn} - Similarity check criteria:')
-            print(f'[DEBUG]   - common_matches ({len(common_matches)}) >= 3: {('✓' if len(common_matches) >= 3 else '✗')}')
-            if common_matches:
-                max_dist_check = max((dist for _, _, dist in common_matches), default=0.0)
-                print(f'[DEBUG]   - all distances < 30.0px (max={max_dist_check:.2f}): {('✓' if all((dist < 30.0 for _, _, dist in common_matches)) else '✗')}')
-            print(f'[DEBUG]   - prev_best_meta exists: {('✓' if best_meta_prev is not None else '✗')}')
-            prev_quality_dbg = best_meta_prev.get('avg_distance')
-            quality_name = 'avg_distance'
-            print(f'[DEBUG]   - prev_{quality_name} exists: {('✓' if prev_quality_dbg is not None else '✗')}')
-            if prev_quality_dbg is not None:
-                print(f'[DEBUG]   - prev_{quality_name} ({float(prev_quality_dbg):.2f}) < 50.0: {('✓' if float(prev_quality_dbg) < 50.0 else '✗')}')
-            prev_score_dbg_failed = best_meta_prev.get('score') if best_meta_prev else None
-            print(f'[DEBUG]   - prev_score ({prev_score_dbg_failed}) >= {SIMILARITY_MIN_SCORE_THRESHOLD}: {('✓' if prev_score_dbg_failed is not None and float(prev_score_dbg_failed) >= SIMILARITY_MIN_SCORE_THRESHOLD else '✗')}')
-    elif DEBUG_FLAG:
-        if best_meta_prev is None:
-            print(f'\n[DEBUG] Frame {fn} - Similarity check SKIPPED: No previous best_meta (prev_valid_frame_id={prev_valid_frame_id})')
-        elif labeled_ref is None:
-            print(f'\n[DEBUG] Frame {fn} - Similarity check SKIPPED: No valid ordered keypoints in previous frame (prev_valid_frame_id={prev_valid_frame_id})')
     if not similar_frame:
         return (False, {})
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {fn} - Reusing order from previous frame {prev_valid_frame_id}')
     log_fn(f'{progress_prefix} - similar to prev, reusing order')
     ordered_kps = [[0.0, 0.0] for _ in range(template_len)]
     orig_idx_map_current = [-1 for _ in range(template_len)]
@@ -3147,11 +2688,9 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
     mapped_count = 0
     skipped_count = 0
     if prev_ordered_keypoints is None or len(prev_ordered_keypoints) != template_len:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} - Similarity reuse: ERROR - prev_ordered_keypoints is invalid, skipping mapping')
+        pass
     elif not common_matches:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} - Similarity reuse: ERROR - no common_matches available, skipping mapping')
+        pass
     else:
 
         def _label_val(lab: Any) -> int | None:
@@ -3191,17 +2730,10 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
                         best_prev_idx = prev_idx
                 if best_prev_idx is not None:
                     prev_idx_to_slot[best_prev_idx] = slot
-        if DEBUG_FLAG:
-            total_valid_prev_slots = len(prev_idx_to_slot)
-            print(f'[DEBUG] Frame {fn} - Similarity reuse: prev_ordered_keypoints has {total_valid_prev_slots} mapped slots from labeled_ref indices')
-            print(f'[DEBUG] Frame {fn} - Similarity reuse: Using {len(common_matches)} matches from similarity check...')
         used_slots = set()
         sorted_matches = sorted(common_matches, key=lambda x: x[2])
         for cur_idx, prev_idx, match_dist in sorted_matches:
             if cur_idx < 0 or cur_idx >= len(labeled_cur):
-                if DEBUG_FLAG:
-                    skipped_count += 1
-                    print(f'[DEBUG] Frame {fn} - Similarity reuse: match cur[{cur_idx}] SKIPPED: invalid cur_idx')
                 continue
             cur_item = labeled_cur[cur_idx]
             cur_x = cur_item.get('x')
@@ -3209,20 +2741,11 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
             cur_orig_id = cur_item.get('id')
             cur_label = _label_val(cur_item.get('label'))
             if cur_x is None or cur_y is None or cur_label is None:
-                if DEBUG_FLAG:
-                    skipped_count += 1
-                    print(f'[DEBUG] Frame {fn} - Similarity reuse: match cur[{cur_idx}] SKIPPED: missing x/y/label')
                 continue
             if prev_idx not in prev_idx_to_slot:
-                if DEBUG_FLAG:
-                    skipped_count += 1
-                    print(f'[DEBUG] Frame {fn} - Similarity reuse: match cur[{cur_idx}] -> prev[{prev_idx}] SKIPPED: prev_idx not mapped to any slot')
                 continue
             target_slot = prev_idx_to_slot[prev_idx]
             if target_slot in used_slots:
-                if DEBUG_FLAG:
-                    skipped_count += 1
-                    print(f'[DEBUG] Frame {fn} - Similarity reuse: match cur[{cur_idx}] -> prev[{prev_idx}] -> slot[{target_slot}] SKIPPED: slot already used')
                 continue
             cur_coord = None
             if cur_orig_id is not None:
@@ -3233,15 +2756,6 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
             orig_idx_map_current[target_slot] = int(cur_orig_id) if cur_orig_id is not None else -1
             used_slots.add(target_slot)
             mapped_count += 1
-            if DEBUG_FLAG:
-                prev_item = labeled_ref[prev_idx] if labeled_ref and 0 <= prev_idx < len(labeled_ref) else None
-                prev_id = prev_item.get('id') if prev_item else '?'
-                print(f'[DEBUG] Frame {fn} - Similarity reuse: MAPPED cur[{cur_idx}] (orig_id={cur_orig_id}, label={cur_label}) -> prev[{prev_idx}] (ID {prev_id}) -> slot[{target_slot}] (label={KEYPOINT_LABELS[target_slot]}) = ({cur_coord[0]:.2f}, {cur_coord[1]:.2f}), match_dist={match_dist:.2f}px')
-    if DEBUG_FLAG:
-        valid_ordered = sum((1 for pt in ordered_kps if pt and len(pt) >= 2 and (not (abs(pt[0]) < 1e-06 and abs(pt[1]) < 1e-06))))
-        print(f'[DEBUG] Frame {fn} - Similarity reuse: Summary - {mapped_count} keypoints mapped, {skipped_count} skipped, {valid_ordered} valid in ordered_kps (out of {len(ordered_kps)} total slots)')
-        valid_slots = [(i, [float(pt[0]), float(pt[1])]) for i, pt in enumerate(ordered_kps) if pt and len(pt) >= 2 and (not (abs(pt[0]) < 1e-06 and abs(pt[1]) < 1e-06))]
-        print(f'[DEBUG] Frame {fn} - Similarity reuse: Valid ordered_kps slots: {valid_slots}')
     step1_entry = {'frame_id': int(fn), 'frame_size': [int(W), int(H)], 'keypoints': [None if pt is None else [float(x) for x in pt] for pt in kps or []], 'labels': labels, 'connections': []}
     step2_entry = {'frame_id': int(fn), 'frame_size': [int(W), int(H)], 'connections': [], 'keypoints': step1_entry['keypoints'], 'labels': labels, 'four_points': []}
     step3_entry = {'frame_id': int(fn), 'connections': [], 'keypoints': step1_entry['keypoints'], 'frame_size': [int(W), int(H)], 'labels': labels, 'decision': None, 'matches': []}
@@ -3262,8 +2776,6 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
             found = fr
             break
     if found is None:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {fn} not found in original JSON, skipping')
         return (True, {})
     found['keypoints'] = ordered_kps
     found.pop('original_index', None)
@@ -3284,9 +2796,6 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
     validation_passed = False
     validation_error = None
     if STEP5_ENABLED and (not best_meta.get('added_four_point')):
-        if DEBUG_FLAG:
-            valid_slots_pre_step5 = [(i, [float(pt[0]), float(pt[1])]) for i, pt in enumerate(ordered_kps) if pt and len(pt) >= 2 and (not (abs(pt[0]) < 1e-06 and abs(pt[1]) < 1e-06))]
-            print(f'[DEBUG] Frame {fn} - Step 5 (similar frame path): Valid ordered_kps slots BEFORE validation: {valid_slots_pre_step5}')
         validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(ordered_kps=ordered_kps, frame=frame, template_image=template_image, template_keypoints=FOOTBALL_KEYPOINTS, frame_number=int(fn), best_meta=best_meta, debug_label='similar frame path', cached_edges=cached_edges)
     best_meta['validation_passed'] = validation_passed
     if validation_error:
@@ -3295,9 +2804,6 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
         ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
         best_meta['reordered_keypoints'] = ordered_kps
     if not validation_passed:
-        if DEBUG_FLAG:
-            error_msg = validation_error or 'Unknown validation error'
-            print(f'[DEBUG] Frame {fn} - Step 5: Validation failed ({error_msg}), using fallback adding_four_points')
         orig_kps_local = original_keypoints.get(int(fn)) or []
         ordered_kps = adding_four_points(orig_kps_local, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
         best_meta['reordered_keypoints'] = ordered_kps
@@ -3343,8 +2849,6 @@ def _step7_interpolate_problematic_frames(*, step5_outputs: list[dict[str, Any]]
         return
     if len(step5_outputs) == 0:
         return
-    if DEBUG_FLAG:
-        print(f'Step 7: Processing {len(step5_outputs)} entries from step 5 for interpolation')
     step5_outputs_serializable_for_step7: list[dict[str, Any]] = []
     for entry in step5_outputs:
         entry_copy = entry.copy()
@@ -3358,8 +2862,6 @@ def _step7_interpolate_problematic_frames(*, step5_outputs: list[dict[str, Any]]
             entry_copy['score'] = round(float(score), 2)
         step5_outputs_serializable_for_step7.append(entry_copy)
     if not step5_outputs_serializable_for_step7:
-        if DEBUG_FLAG:
-            print('Step 7: No frames needed interpolation (no problematic frames found or no valid good frames)')
         return
     step7_entries: list[dict[str, Any]] = []
     frame_map: dict[int, dict[str, Any]] = {}
@@ -3375,8 +2877,6 @@ def _step7_interpolate_problematic_frames(*, step5_outputs: list[dict[str, Any]]
         added_four_point = entry.get('added_four_point', False)
         if score is not None and score < 0.7 or added_four_point:
             problematic_frames.append(frame_id)
-    if DEBUG_FLAG:
-        print(f'Step 7: Found {len(problematic_frames)} problematic frames (score < 0.5 or added_four_point: true)')
     already_rewritten: set[int] = set()
 
     def count_valid_keypoints(kps: list[list[float]]) -> int:
@@ -3477,10 +2977,6 @@ def _step7_interpolate_problematic_frames(*, step5_outputs: list[dict[str, Any]]
     if not step7_final:
         print('Step 7: No frames needed interpolation (no problematic frames found or no valid good frames)')
         return
-    if DEBUG_FLAG:
-        out_step7.parent.mkdir(parents=True, exist_ok=True)
-        out_step7.write_text(json.dumps(step7_final, indent=2))
-        print(f'Step 7: Wrote {len(step7_final)} interpolated frame entries to {out_step7}')
     step7_keypoints_map: dict[int, list[list[float]]] = {}
     for entry in step7_final:
         frame_id = entry.get('frame_id')
@@ -3498,8 +2994,6 @@ def _step7_interpolate_problematic_frames(*, step5_outputs: list[dict[str, Any]]
         if fid_int in step7_keypoints_map:
             fr['keypoints'] = step7_keypoints_map[fid_int]
             updated_count += 1
-    if DEBUG_FLAG and updated_count > 0:
-        print(f'Step 7: Updated {updated_count} frames in ordered_frames with interpolated keypoints')
 _TEMPLATE_LOAD_ERROR: float | None = None
 
 @functools.lru_cache(maxsize=1)
@@ -3732,8 +3226,6 @@ def _load_miner_predictions_from_obj(data: Any, *, frame_width: int | None=None,
                 if abs(x) < 1e-06 and abs(y) < 1e-06:
                     continue
                 if _in_border(x, y):
-                    if DEBUG_FLAG:
-                        border_points_for_debug.append((int(frame_id), i, x, y))
                     kps[i] = [0.0, 0.0]
                     if isinstance(labels, list) and i < len(labels):
                         labels[i] = 0
@@ -3761,8 +3253,6 @@ def _load_miner_predictions_from_obj(data: Any, *, frame_width: int | None=None,
                 entry['keypoints'] = kps
                 if isinstance(labels, list):
                     entry['labels'] = labels
-        if DEBUG_FLAG and removed_total > 0:
-            print(f'[DEBUG] BORDER_50PX_REMOVE_FLAG: removed {removed_total} keypoints at load-time (margin={m}px, frame={W}x{H})')
     return parsed
 
 def _avg_distance_same_label(cur_labeled: list[dict[str, Any]], prev_labeled: list[dict[str, Any]]) -> tuple[float, int, list[tuple[int, int, float]]]:
@@ -4107,9 +3597,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     debug_log_lines: list[str] = []
 
     def _debug_log(msg: str) -> None:
-        if DEBUG_FLAG:
-            debug_log_lines.append(msg)
-
+        pass
     def _agent_log(message: str, data: dict[str, Any], hypothesis_id: str) -> None:
         try:
             payload = {'sessionId': 'debug-session', 'runId': 'pre-fix', 'hypothesisId': hypothesis_id, 'location': 'opt_v3/keypoints_convert.py:adding_four_points', 'message': message, 'data': data, 'timestamp': int(time.time() * 1000)}
@@ -4133,8 +3621,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     if _profile:
         _t_marks['got_frame'] = time.perf_counter()
     frame_height, frame_width = frame_img.shape[:2]
-    if DEBUG_FLAG:
-        _debug_log(f'frame_id={frame_id} size={frame_width}x{frame_height}')
     result = [[0.0, 0.0] for _ in range(template_len)]
     if not ADDING_FOUR_POINTS_ENABLED:
         d = float(frame_width) / 20.0
@@ -4147,107 +3633,8 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         result[5] = (100.0, 400.0)
         result[24] = (101.0, 100.0)
         result[29] = (101.0, 400.0)
-        if DEBUG_FLAG:
-            debug_dir = Path('debug_frames') / 'adding_four_points_disabled'
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            edges = compute_frame_canny_edges(frame_img)
-            edge_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-
-            def _draw_plus(img: np.ndarray, x: int, y: int, size: int=5) -> None:
-                cv2.line(img, (x - size, y), (x + size, y), (0, 0, 255), 1)
-                cv2.line(img, (x, y - size), (x, y + size), (0, 0, 255), 1)
-            for kp in result:
-                if kp and len(kp) >= 2:
-                    xf = float(kp[0])
-                    yf = float(kp[1])
-                    if abs(xf) < 1e-06 and abs(yf) < 1e-06:
-                        continue
-                    x = int(round(xf))
-                    y = int(round(yf))
-                    if 0 <= x < frame_width and 0 <= y < frame_height:
-                        _draw_plus(edge_bgr, x, y)
-            template_img = challenge_template()
-            projected_template = None
-            if template_img is not None:
-                template_kps: list[tuple[int, int]] = []
-                frame_kps_list: list[tuple[int, int]] = []
-                for idx, kp in enumerate(result):
-                    if not kp or len(kp) < 2:
-                        continue
-                    x = float(kp[0])
-                    y = float(kp[1])
-                    if abs(x) < 1e-06 and abs(y) < 1e-06:
-                        continue
-                    if 0 <= x < frame_width and 0 <= y < frame_height:
-                        template_kps.append(FOOTBALL_KEYPOINTS[idx])
-                        frame_kps_list.append((int(round(x)), int(round(y))))
-                if len(frame_kps_list) >= 4:
-                    try:
-                        projected_template = project_image_using_keypoints(image=template_img, source_keypoints=template_kps, destination_keypoints=frame_kps_list, destination_width=frame_width, destination_height=frame_height, inverse=False)
-                        alpha = 0.5
-                        edge_bgr = cv2.addWeighted(edge_bgr, 1.0 - alpha, projected_template, alpha, 0)
-                    except Exception as e:
-                        print(f'[DEBUG] Frame {frame_id} - add4 disabled: Failed to project template: {e}')
-            out_path = debug_dir / f'frame_{int(frame_id):03d}_edges_keypoints_template.png'
-            cv2.imwrite(str(out_path), edge_bgr)
-            edge_dil_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-            if projected_template is not None:
-                try:
-                    mask_ground_bin, mask_lines = extract_masks_for_ground_and_lines(image=projected_template, debug_frame_id=int(frame_id))
-                except Exception as e:
-                    print(f'[DEBUG] Frame {frame_id} - add4 disabled: Failed to extract mask lines: {e}')
-                    gray_tpl = cv2.cvtColor(projected_template, cv2.COLOR_BGR2GRAY)
-                    _, mask_ground = cv2.threshold(gray_tpl, 10, 255, cv2.THRESH_BINARY)
-                    _, mask_lines = cv2.threshold(gray_tpl, 200, 255, cv2.THRESH_BINARY)
-                    mask_ground_bin = (mask_ground > 0).astype(np.uint8)
-                try:
-                    mask_ground_u8 = (mask_ground_bin > 0).astype(np.uint8) * 255
-                    edges_on_ground = cv2.bitwise_and(edges, edges, mask=mask_ground_u8)
-                    try:
-                        edges_dil = cv2.dilate(edges_on_ground, _kernel_rect_3(), iterations=3)
-                    except Exception:
-                        edges_dil = cv2.dilate(edges_on_ground, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=3)
-                    edge_dil_bgr = cv2.cvtColor(edges_dil, cv2.COLOR_GRAY2BGR)
-                    edge_dil_bgr[mask_lines > 0] = (0, 0, 255)
-                except Exception as e:
-                    print(f'[DEBUG] Frame {frame_id} - add4 disabled: Failed to build dilated mask image: {e}')
-            out_path_dil = debug_dir / f'frame_{int(frame_id):03d}_edges_dilated_mask_lines.png'
-            cv2.imwrite(str(out_path_dil), edge_dil_bgr)
-            if projected_template is not None:
-                try:
-                    cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_score_step1_warped_template.png'), projected_template)
-                    try:
-                        mask_ground_bin, mask_lines_expected = extract_masks_for_ground_and_lines(image=projected_template, debug_frame_id=int(frame_id))
-                    except Exception as e:
-                        print(f'[DEBUG] Frame {frame_id} - add4 disabled: Failed to extract scoring masks: {e}')
-                        gray_tpl = cv2.cvtColor(projected_template, cv2.COLOR_BGR2GRAY)
-                        _, mask_ground = cv2.threshold(gray_tpl, 10, 255, cv2.THRESH_BINARY)
-                        _, mask_lines = cv2.threshold(gray_tpl, 200, 255, cv2.THRESH_BINARY)
-                        mask_ground_bin = (mask_ground > 0).astype(np.uint8)
-                        mask_lines_expected = (mask_lines > 0).astype(np.uint8)
-                    cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_score_step2_mask_ground.png'), mask_ground_bin * 255)
-                    step3_vis = cv2.cvtColor(mask_lines_expected * 255, cv2.COLOR_GRAY2BGR)
-                    contours, _ = cv2.findContours((mask_lines_expected * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    for cnt in contours:
-                        x, y, w, h = cv2.boundingRect(cnt)
-                        if w == 0 or h == 0:
-                            continue
-                        aspect_ratio = min(w, h) / max(w, h)
-                        if aspect_ratio >= 1.0:
-                            cv2.drawContours(step3_vis, [cnt], -1, (0, 0, 255), -1)
-                    cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_score_step3_mask_lines_expected.png'), step3_vis)
-                    mask_lines_predicted = extract_mask_of_ground_lines_in_image(image=frame_img, ground_mask=mask_ground_bin, cached_edges=edges)
-                    cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_score_step4_mask_lines_predicted.png'), mask_lines_predicted * 255)
-                    overlap_vis = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-                    overlap_vis[..., 1] = np.where(mask_lines_predicted > 0, 255, overlap_vis[..., 1])
-                    overlap_vis[..., 2] = np.where(mask_lines_expected > 0, 255, overlap_vis[..., 2])
-                    cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_score_step5_overlap.png'), overlap_vis)
-                except Exception as e:
-                    print(f'[DEBUG] Frame {frame_id} - add4 disabled: Failed to save scoring steps: {e}')
         return result
     if cached_edges is None:
-        if DEBUG_FLAG:
-            print(f'[DEBUG] Frame {frame_id} - adding_four_points: Starting edge detection, frame size {frame_width}x{frame_height}')
         gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
         gray_tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, _kernel_rect_31())
         gray_blur = cv2.GaussianBlur(gray_tophat, (5, 5), 0)
@@ -4256,9 +3643,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         edges = cached_edges
     binary_edges = (edges > 0).astype(np.uint8)
     _mark('edge_done')
-    if DEBUG_FLAG:
-        edge_count = int(binary_edges.sum())
-        print(f'[DEBUG] Frame {frame_id} - adding_four_points: Edge detection complete, {edge_count} white pixels')
     ii = cv2.integral(binary_edges)
     row_prefix = (ii[1:, 1:] - ii[:-1, 1:]).astype(np.int32)
     col_prefix = (ii[1:, 1:] - ii[1:, :-1]).astype(np.int32)
@@ -4464,9 +3848,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     if polygon_masks is None:
                         raise ValueError(f"Polygon masks missing for group '{group.get('name')}'")
                 mask_label = f'{group.get('name')}_xf_{transform_idx}'
-                if DEBUG_FLAG:
-                    mask_subdir = 'template_projected_masks' if ADD4_USE_POLYGON_MASKS else 'polygon_masks'
-                    mask_debug_dir = Path('debug_frames') / 'adding_four_points' / mask_subdir
                 score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS, frame_keypoints=frame_keypoints_tuples, frame=frame_img, floor_markings_template=template_image, frame_number=frame_number_val, log_frame_number=False, cached_edges=edges, mask_polygons=polygon_masks, mask_debug_label=mask_label, mask_debug_dir=mask_debug_dir, score_only=False, log_context={'transform_idx': transform_idx, 'pair_indices': list(group.get('indices', []))}, processing_scale=PROCESSING_SCALE)
                 if _profile:
                     _t_eval_total += time.perf_counter() - _t_eval0
@@ -4497,7 +3878,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 except Exception as e:
                     return (0.0, None, 'score-invalid', f'build_points failed: {e}')
                 return _evaluate_points(points_t)
-            if TV_AF_EVAL_PARALLEL and (not DEBUG_FLAG) and (len(candidates) > 1):
+            if TV_AF_EVAL_PARALLEL and (len(candidates) > 1):
                 max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
                 with ThreadPoolExecutor(max_workers=max_workers) as ex:
                     futures = {ex.submit(_eval_candidate, yy2_val): yy2_val for yy2_val, _ in candidates}
@@ -4647,8 +4028,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     h_20_90: dict[str, float] | None = None
     v_20_90: dict[str, float] | None = None
     v_10_80: dict[str, float] | None = None
-    if DEBUG_FLAG:
-        print(f'[DEBUG] Frame {frame_id} - adding_four_points: Searching for 10px sloping lines in overall areas')
     global _adding_four_points_cy_candidate_logged
     if not _adding_four_points_cy_candidate_logged:
         if _search_horizontal_in_area_integral_cy is not None and _search_vertical_in_area_integral_cy is not None and (_integral_flat_cy is not None):
@@ -4667,7 +4046,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         x_hi_10_80 = int(frame_width * 0.8)
         x_lo_20_90 = int(frame_width * 0.2)
         x_hi_20_90 = int(frame_width * 0.9)
-        if TV_AF_EVAL_PARALLEL and (not DEBUG_FLAG):
+        if TV_AF_EVAL_PARALLEL:
             with ThreadPoolExecutor(max_workers=TV_AF_EVAL_MAX_WORKERS) as ex:
                 h_10_80_fut = ex.submit(_search_horizontal_in_area, y_lo_10_80, y_hi_10_80, max_slope_h)
                 h_20_90_fut = ex.submit(_search_horizontal_in_area, y_lo_20_90, y_hi_20_90, max_slope_h)
@@ -4969,14 +4348,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         p23 = (wt, yy2 + 50.5 * dy)
         pts_t = [p22, p23, p25, p26, p27]
         return [_inv_xf_point(xt, yt, frame_width, frame_height, swap, flip_x, flip_y) for xt, yt in pts_t]
-    if DEBUG_FLAG:
-
-        def _cand_payload(cands: list[dict[str, float]]) -> list[dict[str, float]]:
-            return [{'pos': float(c.get('pos', -1.0)), 'start': float(c.get('start', -1.0)), 'count': float(c.get('count', 0.0)), 'rate': float(c.get('rate', 0.0))} for c in cands]
-        h_sorted = sorted(horizontal_candidates, key=lambda c: float(c.get('pos', -1.0)))
-        v_sorted = sorted(vertical_candidates, key=lambda c: float(c.get('pos', -1.0)))
-        _debug_log('horizontal_candidates_sorted_by_pos=' + json.dumps(_cand_payload(h_sorted), ensure_ascii=True))
-        _debug_log('vertical_candidates_sorted_by_pos=' + json.dumps(_cand_payload(v_sorted), ensure_ascii=True))
     edges_xf_cache: dict[tuple[bool, bool, bool], np.ndarray] = {}
 
     def _edges_xf(swap_axes: bool, flip_x: bool, flip_y: bool) -> np.ndarray:
@@ -5219,7 +4590,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 best_kps = None
                 best_tf_idx = -1
                 scores_list_tpl: list[tuple[float, float, float, int, list[tuple[float, float]]] | None] = [None] * 8
-                mask_debug_dir = Path('debug_frames') / 'adding_four_points' / 'template_projected_masks' if DEBUG_FLAG else None
+                mask_debug_dir = None
 
                 def _eval_one_tf(tf_idx: int):
                     frame_kps = _kps_fn(tf_idx)
@@ -5233,7 +4604,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_one_tf, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -5282,7 +4653,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_tf_poly01913, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -5330,7 +4701,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_tf_poly13172425, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -5378,7 +4749,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_tf_poly15161920, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -5426,7 +4797,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None and (not DEBUG_FLAG):
+                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_tf_poly2223252627, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -5491,8 +4862,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                         best_idx = int(np.argmax(counts))
                         best_count = int(counts[best_idx])
                         best_y = float(candidate_ys[best_idx])
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_id} - add4 pair22: yy2 best={best_y:.1f} count={best_count}')
             return best_y
 
         def _top_horizontal_segment_ys(yy: float, wt: int, ht: int, swap_axes: bool, flip_x: bool, flip_y: bool, limit: int) -> list[tuple[float, int]]:
@@ -5528,10 +4897,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             line_candidates = vertical_candidates if swap_axes else horizontal_candidates
             if not line_candidates:
                 return None
-            if DEBUG_FLAG:
-                cand_positions = [float(c.get('pos', -1.0)) for c in line_candidates]
-                _debug_log('transform_select_start=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'swap': bool(swap_axes), 'flip_x': bool(flip_x), 'flip_y': bool(flip_y), 'line_candidates_pos': cand_positions}, ensure_ascii=True))
-
             def _fallback_from_line(line: dict[str, float]) -> tuple[dict[str, float] | None, float, float]:
                 if swap_axes:
                     x_line = float(line['pos'])
@@ -5553,14 +4918,10 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 if swap_axes:
                     x_line = float(line['pos'])
                     segments = seg_right_by_line.get(int(x_line), []) if not flip_y else seg_left_by_line.get(int(x_line), [])
-                    if DEBUG_FLAG:
-                        _debug_log('transform_line_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'axis': 'vertical', 'line_pos': float(x_line), 'segments': int(len(segments))}, ensure_ascii=True))
                     for seg in segments:
                         x_orig = x_line
                         y_orig = float(seg['y'])
                         xt, yt, wt, ht = _xf_point(x_orig, y_orig, frame_width, frame_height, swap=swap_axes, flip_x=flip_x, flip_y=flip_y)
-                        if DEBUG_FLAG:
-                            _debug_log('transform_seg_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'x_orig': float(x_orig), 'y_orig': float(y_orig), 'xt': float(xt), 'yt': float(yt), 'wt': int(wt), 'ht': int(ht), 'constraints_ok': bool(_constraints_ok(xt, yt, wt, ht))}, ensure_ascii=True))
                         if _constraints_ok(xt, yt, wt, ht):
                             if seg_step_precompute > 1:
                                 fine_segments = _segments_right_fine(x_line) if not flip_y else _segments_left_fine(x_line)
@@ -5568,26 +4929,16 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                                     x_ref = x_line
                                     y_ref = float(seg_f['y'])
                                     xt_f, yt_f, wt_f, ht_f = _xf_point(x_ref, y_ref, frame_width, frame_height, swap=swap_axes, flip_x=flip_x, flip_y=flip_y)
-                                    if DEBUG_FLAG:
-                                        _debug_log('transform_seg_refine_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'x_ref': float(x_ref), 'y_ref': float(y_ref), 'xt': float(xt_f), 'yt': float(yt_f), 'wt': int(wt_f), 'ht': int(ht_f), 'constraints_ok': bool(_constraints_ok(xt_f, yt_f, wt_f, ht_f))}, ensure_ascii=True))
                                     if _constraints_ok(xt_f, yt_f, wt_f, ht_f):
-                                        if DEBUG_FLAG:
-                                            _debug_log('transform_selected=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'line_pos': float(x_line), 'x_ref': float(x_ref), 'y_ref': float(y_ref), 'refined': True}, ensure_ascii=True))
                                         return (line, seg_f, x_ref, y_ref, xt_f, yt_f, wt_f, ht_f, True)
-                            if DEBUG_FLAG:
-                                _debug_log('transform_selected=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'line_pos': float(x_line), 'x_ref': float(x_orig), 'y_ref': float(y_orig), 'refined': False}, ensure_ascii=True))
                             return (line, seg, x_orig, y_orig, xt, yt, wt, ht, True)
                 else:
                     y_line = float(line['pos'])
                     segments = seg_down_by_line.get(int(y_line), []) if not flip_y else seg_up_by_line.get(int(y_line), [])
-                    if DEBUG_FLAG:
-                        _debug_log('transform_line_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'axis': 'horizontal', 'line_pos': float(y_line), 'segments': int(len(segments))}, ensure_ascii=True))
                     for seg in segments:
                         x_orig = float(seg['x'])
                         y_orig = y_line
                         xt, yt, wt, ht = _xf_point(x_orig, y_orig, frame_width, frame_height, swap=swap_axes, flip_x=flip_x, flip_y=flip_y)
-                        if DEBUG_FLAG:
-                            _debug_log('transform_seg_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'x_orig': float(x_orig), 'y_orig': float(y_orig), 'xt': float(xt), 'yt': float(yt), 'wt': int(wt), 'ht': int(ht), 'constraints_ok': bool(_constraints_ok(xt, yt, wt, ht))}, ensure_ascii=True))
                         if _constraints_ok(xt, yt, wt, ht):
                             if seg_step_precompute > 1:
                                 fine_segments = _segments_down_fine(y_line) if not flip_y else _segments_up_fine(y_line)
@@ -5595,23 +4946,13 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                                     x_ref = float(seg_f['x'])
                                     y_ref = y_line
                                     xt_f, yt_f, wt_f, ht_f = _xf_point(x_ref, y_ref, frame_width, frame_height, swap=swap_axes, flip_x=flip_x, flip_y=flip_y)
-                                    if DEBUG_FLAG:
-                                        _debug_log('transform_seg_refine_check=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'x_ref': float(x_ref), 'y_ref': float(y_ref), 'xt': float(xt_f), 'yt': float(yt_f), 'wt': int(wt_f), 'ht': int(ht_f), 'constraints_ok': bool(_constraints_ok(xt_f, yt_f, wt_f, ht_f))}, ensure_ascii=True))
                                     if _constraints_ok(xt_f, yt_f, wt_f, ht_f):
-                                        if DEBUG_FLAG:
-                                            _debug_log('transform_selected=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'line_pos': float(y_line), 'x_ref': float(x_ref), 'y_ref': float(y_ref), 'refined': True}, ensure_ascii=True))
                                         return (line, seg_f, x_ref, y_ref, xt_f, yt_f, wt_f, ht_f, True)
-                            if DEBUG_FLAG:
-                                _debug_log('transform_selected=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_idx': int(line_idx), 'line_pos': float(y_line), 'x_ref': float(x_orig), 'y_ref': float(y_orig), 'refined': False}, ensure_ascii=True))
                             return (line, seg, x_orig, y_orig, xt, yt, wt, ht, True)
-            if DEBUG_FLAG:
-                _debug_log('transform_fallback=' + json.dumps({'group': str(group.get('name')), 'transform_idx': int(transform_idx), 'line_pos': float(fallback_line.get('pos', -1.0)) if fallback_line else -1.0, 'x_ref': float(fallback_x), 'y_ref': float(fallback_y)}, ensure_ascii=True))
             return (fallback_line, fallback_seg, fallback_x, fallback_y, fb_xt, fb_yt, fb_wt, fb_ht, False)
 
         def _best_yy2_candidate(yt_val: float, wt: int, ht: int, swap_axes: bool, flip_x: bool, flip_y: bool) -> float | None:
             candidates = _top_horizontal_segment_ys(yt_val, wt, ht, swap_axes, flip_x, flip_y, ADD4_PAIR22_TOP_YY2)
-            if DEBUG_FLAG:
-                _debug_log('yy2_candidates=' + json.dumps({'group': str(group.get('name')), 'swap': bool(swap_axes), 'flip_x': bool(flip_x), 'flip_y': bool(flip_y), 'candidates': [(float(y), int(c)) for y, c in candidates]}, ensure_ascii=True))
             if candidates:
                 return float(candidates[0][0])
             return None
@@ -5657,11 +4998,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
             transform_results[transform_idx] = (status, score, error, x_orig, y_orig)
             if kps is not None and status != 'rule-invalid':
                 scores_list[transform_idx] = (score, x_orig, y_orig, transform_idx, kps)
-                if DEBUG_FLAG:
-                    t_debug_start = time.perf_counter() if _profile else 0.0
-                    _write_keypoints_debug(kps, transform_idx)
-                    if _profile:
-                        t_transform_debug += time.perf_counter() - t_debug_start
         t_transform_loop_end = time.perf_counter() if _profile else 0.0
         _mark('t01_done')
         _mark('t23_done')
@@ -5683,7 +5019,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
     group_defs = _get_add4_group_defs(frame_height)
     _dbglog('H3', 'group_defs', {'frame_id': int(frame_id), 'group_defs_count': int(len(group_defs)), 'group_names': [str(g.get('name')) for g in group_defs]})
     group_results = []
-    if TV_AF_EVAL_PARALLEL and (not DEBUG_FLAG) and (len(group_defs) > 1):
+    if TV_AF_EVAL_PARALLEL and (len(group_defs) > 1):
         max_workers = max(1, int(TV_AF_EVAL_MAX_WORKERS))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {ex.submit(_evaluate_group, group, ex): idx for idx, group in enumerate(group_defs)}
@@ -5723,8 +5059,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                         result = group_result['best_keypoints']
                         break
         else:
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_id} - adding_four_points: No valid scores found, using fallback')
             for idx, pt in _fallback_points_default(frame_width, frame_height).items():
                 result[idx] = pt
     else:
@@ -5738,25 +5072,8 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                         result = group_result['best_keypoints']
                         break
         else:
-            if DEBUG_FLAG:
-                print(f'[DEBUG] Frame {frame_id} - adding_four_points: No valid scores found, using fallback')
             for idx, pt in _fallback_points_default(frame_width, frame_height).items():
                 result[idx] = pt
-    if _DEBUG_FRAME_ID >= 0 and frame_id == _DEBUG_FRAME_ID and (selected_group_result is not None):
-        transforms_dump = []
-        for idx in range(8):
-            entry = {'idx': idx, 'transform': list(transforms[idx]), 'result': None}
-            if selected_group_result['transform_results'][idx] is not None:
-                status, score, error_msg, x_val, y_val = selected_group_result['transform_results'][idx]
-                entry['result'] = {'status': status, 'score': None if score is None else float(score), 'error': error_msg, 'x': None if x_val is None else float(x_val), 'y': None if y_val is None else float(y_val)}
-            transforms_dump.append(entry)
-        scores_dump = []
-        for idx, score_data in enumerate(selected_group_result['scores_list']):
-            if score_data is None:
-                continue
-            score, xo, yo, transform_idx, _kps = score_data
-            scores_dump.append({'idx': idx, 'score': float(score), 'x': float(xo), 'y': float(yo), 'transform_idx': int(transform_idx)})
-        _maybe_dump_debug_frame(int(frame_id), {'frame_id': int(frame_id), 'frame_width': int(frame_width), 'frame_height': int(frame_height), 'threshold': float(selected_group_result['threshold']), 'step': int(selected_group_result['step']), 'used_parallel_eval': bool(selected_group_result['used_parallel_eval']), 'horizontal_candidates': int(len(selected_group_result['horizontal_candidates'])), 'vertical_candidates': int(len(selected_group_result['vertical_candidates'])), 'valid_scores_count': int(len(selected_group_result['valid_scores'])), 'add4_group': selected_group_result['group']['name'], 'transforms': transforms_dump, 'scores': scores_dump})
     if _profile:
         _t_end = time.perf_counter()
         _mark('done')
@@ -5797,309 +5114,6 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         print('  COUNTS: h_cand=%d v_cand=%d seg_down=%d seg_up=%d seg_right=%d seg_left=%d eval_calls=%d' % (int(_counts.get('h_candidates', 0)), int(_counts.get('v_candidates', 0)), int(_counts.get('seg_down', 0)), int(_counts.get('seg_up', 0)), int(_counts.get('seg_right', 0)), int(_counts.get('seg_left', 0)), int(_counts.get('eval_calls', 0))))
         print('=' * 80 + '\n')
     selected_indices = list(selected_group['indices']) if selected_group is not None else [0, 1, 9, 13]
-    if DEBUG_FLAG:
-        result_parts = ', '.join((f'[{idx}]={result[idx]}' for idx in selected_indices))
-        print(f'[DEBUG] Frame {frame_id} - adding_four_points: Result keypoints - {result_parts}')
-        debug_dir = Path('debug_frames') / 'adding_four_points'
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        edge_with_kps = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-        edge_with_lines = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-        if frame_width > 0 and frame_height > 0:
-            hw = SLOPING_LINE_HALF_WIDTH
-
-            def _band_polygon(ax: float, ay: float, bx: float, by: float) -> np.ndarray | None:
-                L = float(np.hypot(bx - ax, by - ay))
-                if L < 1.0:
-                    return None
-                perp_x = -(by - ay) / L
-                perp_y = (bx - ax) / L
-                pts = np.array([[ax - hw * perp_x, ay - hw * perp_y], [bx - hw * perp_x, by - hw * perp_y], [bx + hw * perp_x, by + hw * perp_y], [ax + hw * perp_x, ay + hw * perp_y]], dtype=np.int32)
-                return pts.reshape((-1, 1, 2))
-            overlay = np.zeros_like(edge_with_lines)
-            for cand in horizontal_candidates:
-                try:
-                    y0 = float(cand.get('y0', cand.get('pos', 0)))
-                    y1 = float(cand.get('y1', cand.get('pos', 0)))
-                    ax, ay = (0.0, y0)
-                    bx, by = (float(frame_width - 1), y1)
-                except Exception:
-                    continue
-                poly = _band_polygon(ax, ay, bx, by)
-                if poly is not None:
-                    cv2.fillPoly(overlay, [poly], (0, 255, 0))
-            for cand in vertical_candidates:
-                try:
-                    x0 = float(cand.get('x0', cand.get('pos', 0)))
-                    x1 = float(cand.get('x1', cand.get('pos', 0)))
-                    ax, ay = (x0, 0.0)
-                    bx, by = (x1, float(frame_height - 1))
-                except Exception:
-                    continue
-                poly = _band_polygon(ax, ay, bx, by)
-                if poly is not None:
-                    cv2.fillPoly(overlay, [poly], (0, 0, 255))
-            edge_with_lines = cv2.addWeighted(edge_with_lines, 1.0, overlay, 0.4, 0)
-            for idx, cand in enumerate(horizontal_candidates):
-                try:
-                    y0 = float(cand.get('y0', cand.get('pos', 0)))
-                    y1 = float(cand.get('y1', cand.get('pos', 0)))
-                    mid_y = int((y0 + y1) / 2)
-                    label_y = max(10, min(frame_height - 2, mid_y - 4))
-                    cv2.putText(edge_with_lines, str(idx), (5, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
-                except Exception:
-                    pass
-            for idx, cand in enumerate(vertical_candidates):
-                try:
-                    x0 = float(cand.get('x0', cand.get('pos', 0)))
-                    x1 = float(cand.get('x1', cand.get('pos', 0)))
-                    mid_x = int((x0 + x1) / 2)
-                    label_x = max(2, min(frame_width - 20, mid_x + 2))
-                    cv2.putText(edge_with_lines, str(idx), (label_x, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1, cv2.LINE_AA)
-                except Exception:
-                    pass
-        cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_edges_line_candidates.png'), edge_with_lines)
-        hw = SLOPING_LINE_HALF_WIDTH
-
-        def _band_polygon_pts(ax: float, ay: float, bx: float, by: float) -> np.ndarray | None:
-            L = float(np.hypot(bx - ax, by - ay))
-            if L < 1.0:
-                return None
-            perp_x = -(by - ay) / L
-            perp_y = (bx - ax) / L
-            return np.array([[ax - hw * perp_x, ay - hw * perp_y], [bx - hw * perp_x, by - hw * perp_y], [bx + hw * perp_x, by + hw * perp_y], [ax + hw * perp_x, ay + hw * perp_y]], dtype=np.int32).reshape((-1, 1, 2))
-        for tf_idx in range(8):
-            bl = best_line_for_transform[tf_idx] if tf_idx < len(best_line_for_transform) else None
-            if bl is None:
-                continue
-            img = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-            if bl.get('type') == 'h':
-                y0, y1 = (float(bl.get('_y0', 0)), float(bl.get('_y1', 0)))
-                poly = _band_polygon_pts(0.0, y0, float(frame_width - 1), y1)
-            else:
-                x0, x1 = (float(bl.get('_x0', 0)), float(bl.get('_x1', 0)))
-                poly = _band_polygon_pts(x0, 0.0, x1, float(frame_height - 1))
-            if poly is not None:
-                overlay = np.zeros_like(img)
-                cv2.fillPoly(overlay, [poly], (0, 255, 0))
-                img = cv2.addWeighted(img, 1.0, overlay, 0.5, 0)
-            cv2.putText(img, f'transform_{tf_idx}', (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_best_line_transform_{tf_idx}.png'), img)
-        if ADD4_PAIR_0_1_9_13:
-            polygon_def_01 = _get_polygon_masks('pair_0_1_9_13') or {}
-            tpl_indices_01 = [0, 1, 9, 13]
-            tpl_pts_01 = np.array([[float(FOOTBALL_KEYPOINTS[i][0]), float(FOOTBALL_KEYPOINTS[i][1])] for i in tpl_indices_01], dtype=np.float32)
-            for tf_idx in range(8):
-                frame_kps = _pair01913_kps_for_transform(tf_idx)
-                if frame_kps is None:
-                    continue
-                dst_pts = np.array([[float(p[0]), float(p[1])] for p in frame_kps], dtype=np.float32)
-                H_mat, _ = cv2.findHomography(tpl_pts_01, dst_pts)
-                if H_mat is None:
-                    continue
-
-                def _warp_poly_01(poly: list[tuple[float, float]]) -> np.ndarray | None:
-                    if not poly or len(poly) < 3:
-                        return None
-                    pts = np.array(poly, dtype=np.float32).reshape(-1, 1, 2)
-                    warped = cv2.perspectiveTransform(pts, H_mat)
-                    if not np.isfinite(warped).all():
-                        return None
-                    return np.round(warped).astype(np.int32)
-                line_mask_base = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-                overlay = np.zeros_like(line_mask_base)
-                for poly in polygon_def_01.get('ground', []):
-                    w = _warp_poly_01(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (128, 128, 128))
-                for poly in polygon_def_01.get('line_add', []):
-                    w = _warp_poly_01(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 255, 255))
-                for poly in polygon_def_01.get('line_sub', []):
-                    w = _warp_poly_01(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 0, 0))
-                line_mask_img = cv2.addWeighted(line_mask_base, 1.0, overlay, 0.5, 0)
-                for pt, label in zip(frame_kps, ['0', '1', '9', '13']):
-                    ix, iy = (int(round(pt[0])), int(round(pt[1])))
-                    if 0 <= ix < frame_width and 0 <= iy < frame_height:
-                        cv2.circle(line_mask_img, (ix, iy), 5, (0, 0, 255), -1)
-                        cv2.putText(line_mask_img, label, (ix + 6, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(line_mask_img, f'transform_{tf_idx}', (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-                poly_score = pair01913_poly_scores.get(tf_idx, -1.0)
-                score_str = f'{poly_score:.4f}' if poly_score >= 0 else 'N/A'
-                (tw, th), _ = cv2.getTextSize(score_str, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                cv2.putText(line_mask_img, score_str, (frame_width - tw - 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_line_mask_0_1_9_13_t{tf_idx}.png'), line_mask_img)
-        if ADD4_PAIR_13_17_24_25:
-            polygon_def = _get_polygon_masks('pair_13_17_24_25') or {}
-            tpl_indices = [13, 17, 24, 25]
-            tpl_pts = np.array([[float(FOOTBALL_KEYPOINTS[i][0]), float(FOOTBALL_KEYPOINTS[i][1])] for i in tpl_indices], dtype=np.float32)
-            for tf_idx in range(8):
-                frame_kps = _pair13172425_kps_for_transform(tf_idx)
-                if frame_kps is None:
-                    continue
-                dst_pts = np.array([[float(p[0]), float(p[1])] for p in frame_kps], dtype=np.float32)
-                H_mat, _ = cv2.findHomography(tpl_pts, dst_pts)
-                if H_mat is None:
-                    continue
-
-                def _warp_poly(poly: list[tuple[float, float]]) -> np.ndarray | None:
-                    if not poly or len(poly) < 3:
-                        return None
-                    pts = np.array(poly, dtype=np.float32).reshape(-1, 1, 2)
-                    warped = cv2.perspectiveTransform(pts, H_mat)
-                    if not np.isfinite(warped).all():
-                        return None
-                    return np.round(warped).astype(np.int32)
-                line_mask_base = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-                overlay = np.zeros_like(line_mask_base)
-                for poly in polygon_def.get('ground', []):
-                    w = _warp_poly(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (128, 128, 128))
-                for poly in polygon_def.get('line_add', []):
-                    w = _warp_poly(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 255, 255))
-                for poly in polygon_def.get('line_sub', []):
-                    w = _warp_poly(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 0, 0))
-                line_mask_img = cv2.addWeighted(line_mask_base, 1.0, overlay, 0.5, 0)
-                for pt, label in zip(frame_kps, ['13', '17', '24', '25']):
-                    ix, iy = (int(round(pt[0])), int(round(pt[1])))
-                    if 0 <= ix < frame_width and 0 <= iy < frame_height:
-                        cv2.circle(line_mask_img, (ix, iy), 5, (0, 0, 255), -1)
-                        cv2.putText(line_mask_img, label, (ix + 6, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(line_mask_img, f'transform_{tf_idx}', (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-                poly_score = pair13172425_poly_scores.get(tf_idx, -1.0)
-                score_str = f'{poly_score:.4f}' if poly_score >= 0 else 'N/A'
-                (tw, th), _ = cv2.getTextSize(score_str, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                cv2.putText(line_mask_img, score_str, (frame_width - tw - 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_line_mask_13_17_24_25_t{tf_idx}.png'), line_mask_img)
-        if ADD4_PAIR_15_16_19_20:
-            polygon_def_1516 = _get_polygon_masks('pair_15_16_19_20') or {}
-            tpl_indices_1516 = [15, 16, 19, 20]
-            tpl_pts_1516 = np.array([[float(FOOTBALL_KEYPOINTS[i][0]), float(FOOTBALL_KEYPOINTS[i][1])] for i in tpl_indices_1516], dtype=np.float32)
-            for tf_idx in range(8):
-                frame_kps = _pair15161920_kps_for_transform(tf_idx)
-                if frame_kps is None:
-                    continue
-                dst_pts = np.array([[float(p[0]), float(p[1])] for p in frame_kps], dtype=np.float32)
-                H_mat, _ = cv2.findHomography(tpl_pts_1516, dst_pts)
-                if H_mat is None:
-                    continue
-
-                def _warp_poly_1516(poly: list[tuple[float, float]]) -> np.ndarray | None:
-                    if not poly or len(poly) < 3:
-                        return None
-                    pts = np.array(poly, dtype=np.float32).reshape(-1, 1, 2)
-                    warped = cv2.perspectiveTransform(pts, H_mat)
-                    if not np.isfinite(warped).all():
-                        return None
-                    return np.round(warped).astype(np.int32)
-                line_mask_base = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-                overlay = np.zeros_like(line_mask_base)
-                for poly in polygon_def_1516.get('ground', []):
-                    w = _warp_poly_1516(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (128, 128, 128))
-                for poly in polygon_def_1516.get('line_add', []):
-                    w = _warp_poly_1516(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 255, 255))
-                for poly in polygon_def_1516.get('line_sub', []):
-                    w = _warp_poly_1516(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 0, 0))
-                line_mask_img = cv2.addWeighted(line_mask_base, 1.0, overlay, 0.5, 0)
-                for pt, label in zip(frame_kps, ['15', '16', '19', '20']):
-                    ix, iy = (int(round(pt[0])), int(round(pt[1])))
-                    if 0 <= ix < frame_width and 0 <= iy < frame_height:
-                        cv2.circle(line_mask_img, (ix, iy), 5, (0, 0, 255), -1)
-                        cv2.putText(line_mask_img, label, (ix + 6, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(line_mask_img, f'transform_{tf_idx}', (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-                poly_score = pair15161920_poly_scores.get(tf_idx, -1.0)
-                score_str = f'{poly_score:.4f}' if poly_score >= 0 else 'N/A'
-                (tw, th), _ = cv2.getTextSize(score_str, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                cv2.putText(line_mask_img, score_str, (frame_width - tw - 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_line_mask_15_16_19_20_t{tf_idx}.png'), line_mask_img)
-        if ADD4_PAIR_22_23_25_26_27:
-            polygon_def_2223 = _get_polygon_masks('pair_22_23_25_26_27') or {}
-            tpl_indices_2223 = [22, 23, 25, 26, 27]
-            tpl_pts_2223 = np.array([[float(FOOTBALL_KEYPOINTS[i][0]), float(FOOTBALL_KEYPOINTS[i][1])] for i in tpl_indices_2223], dtype=np.float32)
-            for tf_idx in range(8):
-                frame_kps = _pair2223252627_kps_for_transform(tf_idx)
-                if frame_kps is None:
-                    continue
-                dst_pts = np.array([[float(p[0]), float(p[1])] for p in frame_kps], dtype=np.float32)
-                H_mat, _ = cv2.findHomography(tpl_pts_2223, dst_pts)
-                if H_mat is None:
-                    continue
-
-                def _warp_poly_2223(poly: list[tuple[float, float]]) -> np.ndarray | None:
-                    if not poly or len(poly) < 3:
-                        return None
-                    pts = np.array(poly, dtype=np.float32).reshape(-1, 1, 2)
-                    warped = cv2.perspectiveTransform(pts, H_mat)
-                    if not np.isfinite(warped).all():
-                        return None
-                    return np.round(warped).astype(np.int32)
-                line_mask_base = cv2.cvtColor(binary_edges * 255, cv2.COLOR_GRAY2BGR)
-                overlay = np.zeros_like(line_mask_base)
-                for poly in polygon_def_2223.get('ground', []):
-                    w = _warp_poly_2223(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (128, 128, 128))
-                for poly in polygon_def_2223.get('line_add', []):
-                    w = _warp_poly_2223(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 255, 255))
-                for poly in polygon_def_2223.get('line_sub', []):
-                    w = _warp_poly_2223(poly)
-                    if w is not None:
-                        cv2.fillPoly(overlay, [w], (0, 0, 0))
-                line_mask_img = cv2.addWeighted(line_mask_base, 1.0, overlay, 0.5, 0)
-                for pt, label in zip(frame_kps, ['22', '23', '25', '26', '27']):
-                    ix, iy = (int(round(pt[0])), int(round(pt[1])))
-                    if 0 <= ix < frame_width and 0 <= iy < frame_height:
-                        cv2.circle(line_mask_img, (ix, iy), 5, (0, 0, 255), -1)
-                        cv2.putText(line_mask_img, label, (ix + 6, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.putText(line_mask_img, f'transform_{tf_idx}', (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-                poly_score = pair2223252627_poly_scores.get(tf_idx, -1.0)
-                score_str = f'{poly_score:.4f}' if poly_score >= 0 else 'N/A'
-                (tw, th), _ = cv2.getTextSize(score_str, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-                cv2.putText(line_mask_img, score_str, (frame_width - tw - 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                cv2.imwrite(str(debug_dir / f'frame_{int(frame_id):03d}_line_mask_22_23_25_26_27_t{tf_idx}.png'), line_mask_img)
-        log_path = debug_dir / f'frame_{int(frame_id):03d}_line_selection.log'
-        if debug_log_lines:
-            try:
-                log_path.write_text('\n'.join(debug_log_lines) + '\n', encoding='utf-8')
-            except Exception as e:
-                print(f'[DEBUG] Frame {frame_id} - adding_four_points: Failed to write log: {e}')
-        kp_indices = selected_indices
-        kp_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
-        kp_points = []
-        for idx in kp_indices:
-            kp = result[idx]
-            if kp and len(kp) >= 2:
-                x, y = (int(float(kp[0])), int(float(kp[1])))
-                if 0 <= x < frame_width and 0 <= y < frame_height:
-                    kp_points.append((x, y))
-        if kp_indices == [0, 1, 9, 13] and len(kp_points) >= 4:
-            cv2.line(edge_with_kps, kp_points[0], kp_points[1], (255, 255, 255), 1)
-            cv2.line(edge_with_kps, kp_points[0], kp_points[2], (255, 255, 255), 1)
-            cv2.line(edge_with_kps, kp_points[1], kp_points[3], (255, 255, 255), 1)
-            cv2.line(edge_with_kps, kp_points[2], kp_points[3], (255, 255, 255), 1)
-        for i, idx in enumerate(kp_indices):
-            kp = result[idx]
-            if kp and len(kp) >= 2:
-                x, y = (int(float(kp[0])), int(float(kp[1])))
-                if 0 <= x < frame_width and 0 <= y < frame_height:
-                    color = kp_colors[i % len(kp_colors)]
-                    cv2.circle(edge_with_kps, (x, y), 5, color, -1)
-                    cv2.putText(edge_with_kps, str(idx), (x + 7, y - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
     return result
 
 def main() -> None:
@@ -6120,7 +5134,7 @@ def main() -> None:
         _H0, _W0 = _frame0.shape[:2]
     except Exception:
         _H0, _W0 = (None, None)
-    miner_predictions = _load_miner_predictions(args.unsorted_json, frame_width=_W0, frame_height=_H0, border_margin_px=50.0, frame_store=frame_store if DEBUG_FLAG else None)
+    miner_predictions = _load_miner_predictions(args.unsorted_json, frame_width=_W0, frame_height=_H0, border_margin_px=50.0, frame_store=None)
     frame_ids = sorted(miner_predictions.keys())
     only_frames = globals().get('ONLY_FRAMES')
     if only_frames:
@@ -6226,8 +5240,6 @@ def main() -> None:
                         found = fr
                         break
                 if found is None:
-                    if DEBUG_FLAG:
-                        print(f'[DEBUG] Frame {fn} not found in original JSON, skipping')
                     _log(f'{progress_prefix} - done')
                     continue
                 found['keypoints'] = ordered_kps
@@ -6305,8 +5317,6 @@ def main() -> None:
                 step5_ordered_kps = ordered_kps
                 has_scoring_error = validation_error and ('A projected line is too wide' in validation_error or 'projected line' in validation_error.lower())
                 if validation_passed and step5_score < STEP5_SCORE_THRESHOLD:
-                    if DEBUG_FLAG:
-                        print(f'[DEBUG] Frame {fn} - Step 5: Score {step5_score:.6f} < {STEP5_SCORE_THRESHOLD}, trying adding_four_points() for comparison')
                     t_af1 = time.perf_counter()
                     adding_four_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                     parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af1) * 1000.0
@@ -6316,33 +5326,18 @@ def main() -> None:
                         t_cmp = time.perf_counter()
                         adding_four_score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS_CORRECTED, frame_keypoints=adding_four_tuples, frame=frame, floor_markings_template=template_image, frame_number=int(fn), log_frame_number=False, cached_edges=cached_edges, processing_scale=PROCESSING_SCALE)
                         parts_ms['step5_score_compare'] = parts_ms.get('step5_score_compare', 0.0) + (time.perf_counter() - t_cmp) * 1000.0
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - adding_four_points() score = {adding_four_score:.6f}, Step 5 score = {step5_score:.6f}')
                     except Exception as e:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - adding_four_points() score calculation failed: {e}')
                         adding_four_score = 0.0
                     if adding_four_score > step5_score:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - Using adding_four_points() result (score {adding_four_score:.6f} > Step 5 score {step5_score:.6f})')
                         ordered_kps = adding_four_kps
                         best_meta['score'] = adding_four_score
                         best_meta['reordered_keypoints'] = ordered_kps
                         best_meta['added_four_point'] = True
                         best_meta['fallback'] = True
                     else:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - Using Step 5 result (score {step5_score:.6f} >= adding_four_points() score {adding_four_score:.6f})')
                         ordered_kps = step5_ordered_kps
                         best_meta['added_four_point'] = False
                 elif step5_score == 0.0 or has_scoring_error or (not validation_passed):
-                    if DEBUG_FLAG:
-                        if step5_score == 0.0:
-                            print(f'[DEBUG] Frame {fn} - Step 5: Score is 0.0, using adding_four_points fallback')
-                        elif has_scoring_error:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Validation error '{validation_error}', using adding_four_points fallback")
-                        else:
-                            print(f'[DEBUG] Frame {fn} - Step 5: Validation failed, using adding_four_points fallback')
                     t_af2 = time.perf_counter()
                     ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                     parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af2) * 1000.0
@@ -6374,8 +5369,6 @@ def main() -> None:
                     best_meta_copy['validation_error'] = validation_error or 'Added four points (fallback)'
                     _push(step5_outputs, best_meta_copy)
             else:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {fn} - No valid candidate found in Step 4, using fallback adding_four_points')
                 t_af3 = time.perf_counter()
                 ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                 parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af3) * 1000.0
@@ -6396,8 +5389,6 @@ def main() -> None:
                     found = fr
                     break
             if found is None:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {fn} not found in original JSON, skipping')
                 continue
             found['keypoints'] = ordered_kps
             found['frame_width'] = frame.shape[1]
@@ -6457,8 +5448,6 @@ def main() -> None:
                             frame = frame_store.get_frame(int(frame_id))
                             frame_height, frame_width = frame.shape[:2]
                         except Exception:
-                            if DEBUG_FLAG:
-                                print(f'[DEBUG] Frame {frame_id}: Skipping keypoint adjustment (cannot load frame)')
                             continue
                 else:
                     frame_width = int(frame_width)
@@ -6509,43 +5498,6 @@ def main() -> None:
             fr.pop('keypoints_labeled', None)
             if 'added_four_point' not in fr:
                 fr['added_four_point'] = False
-    if STORE_INTERMEDIATE and DEBUG_FLAG:
-        if step1_outputs is not None:
-            args.out_step1.parent.mkdir(parents=True, exist_ok=True)
-            args.out_step1.write_text(json.dumps(step1_outputs, indent=2))
-        if step2_outputs is not None:
-            args.out_step2.parent.mkdir(parents=True, exist_ok=True)
-            args.out_step2.write_text(json.dumps(step2_outputs, indent=2))
-        if step3_outputs is not None:
-            args.out_step3.parent.mkdir(parents=True, exist_ok=True)
-            args.out_step3.write_text(json.dumps(step3_outputs, indent=2))
-        if best_entries:
-            best_entries_serializable = []
-            for entry in best_entries:
-                entry_copy = entry.copy()
-                avg_dist = entry_copy.get('avg_distance')
-                if avg_dist is not None and (avg_dist == float('inf') or np.isinf(avg_dist)):
-                    entry_copy['avg_distance'] = 99999
-                elif avg_dist is not None and isinstance(avg_dist, (int, float)):
-                    entry_copy['avg_distance'] = round(float(avg_dist), 2)
-                best_entries_serializable.append(entry_copy)
-            args.out_step4.parent.mkdir(parents=True, exist_ok=True)
-            args.out_step4.write_text(json.dumps(best_entries_serializable, indent=2))
-        if step5_outputs is not None and len(step5_outputs) > 0:
-            step5_outputs_serializable = []
-            for entry in step5_outputs:
-                entry_copy = entry.copy()
-                avg_dist = entry_copy.get('avg_distance')
-                if avg_dist is not None and (avg_dist == float('inf') or np.isinf(avg_dist)):
-                    entry_copy['avg_distance'] = 99999
-                elif avg_dist is not None and isinstance(avg_dist, (int, float)):
-                    entry_copy['avg_distance'] = round(float(avg_dist), 2)
-                score = entry_copy.get('score')
-                if score is not None and isinstance(score, (int, float)):
-                    entry_copy['score'] = round(float(score), 2)
-                step5_outputs_serializable.append(entry_copy)
-            args.out_step5.parent.mkdir(parents=True, exist_ok=True)
-            args.out_step5.write_text(json.dumps(step5_outputs_serializable, indent=2))
     optimized_dir = Path('miner_responses_ordered_optimised')
     optimized_dir.mkdir(parents=True, exist_ok=True)
     optimized_path = optimized_dir / args.unsorted_json.name
@@ -6583,7 +5535,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
         _H0, _W0 = _frame0.shape[:2]
     except Exception:
         _H0, _W0 = (None, None)
-    miner_predictions = _load_miner_predictions_from_obj(unsorted_payload, frame_width=_W0, frame_height=_H0, border_margin_px=float(border_margin_px), frame_store=frame_store if DEBUG_FLAG else None)
+    miner_predictions = _load_miner_predictions_from_obj(unsorted_payload, frame_width=_W0, frame_height=_H0, border_margin_px=float(border_margin_px), frame_store=None)
     frame_ids = sorted(miner_predictions.keys())
     only_frames = globals().get('ONLY_FRAMES')
     if only_frames:
@@ -6684,8 +5636,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                         found = fr
                         break
                 if found is None:
-                    if DEBUG_FLAG:
-                        print(f'[DEBUG] Frame {fn} not found in original JSON, skipping')
                     _log(f'{progress_prefix} - done')
                     continue
                 found['keypoints'] = ordered_kps
@@ -6763,8 +5713,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 step5_ordered_kps = ordered_kps
                 has_scoring_error = validation_error and ('A projected line is too wide' in validation_error or 'projected line' in str(validation_error).lower())
                 if validation_passed and step5_score < STEP5_SCORE_THRESHOLD:
-                    if DEBUG_FLAG:
-                        print(f'[DEBUG] Frame {fn} - Step 5: Score {step5_score:.6f} < {STEP5_SCORE_THRESHOLD}, trying adding_four_points() for comparison')
                     t_af1 = time.perf_counter()
                     adding_four_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                     parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af1) * 1000.0
@@ -6774,33 +5722,18 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                         t_cmp = time.perf_counter()
                         adding_four_score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS_CORRECTED, frame_keypoints=adding_four_tuples, frame=frame, floor_markings_template=template_image, frame_number=int(fn), log_frame_number=False, cached_edges=cached_edges, processing_scale=PROCESSING_SCALE)
                         parts_ms['step5_score_compare'] = parts_ms.get('step5_score_compare', 0.0) + (time.perf_counter() - t_cmp) * 1000.0
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - adding_four_points() score = {adding_four_score:.6f}, Step 5 score = {step5_score:.6f}')
                     except Exception as e:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - adding_four_points() score calculation failed: {e}')
                         adding_four_score = 0.0
                     if adding_four_score > step5_score:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - Using adding_four_points() result (score {adding_four_score:.6f} > Step 5 score {step5_score:.6f})')
                         ordered_kps = adding_four_kps
                         best_meta['score'] = adding_four_score
                         best_meta['reordered_keypoints'] = ordered_kps
                         best_meta['added_four_point'] = True
                         best_meta['fallback'] = True
                     else:
-                        if DEBUG_FLAG:
-                            print(f'[DEBUG] Frame {fn} - Using Step 5 result (score {step5_score:.6f} >= adding_four_points() score {adding_four_score:.6f})')
                         ordered_kps = step5_ordered_kps
                         best_meta['added_four_point'] = False
                 elif step5_score == 0.0 or has_scoring_error or (not validation_passed):
-                    if DEBUG_FLAG:
-                        if step5_score == 0.0:
-                            print(f'[DEBUG] Frame {fn} - Step 5: Score is 0.0, using adding_four_points fallback')
-                        elif has_scoring_error:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Validation error '{validation_error}', using adding_four_points fallback")
-                        else:
-                            print(f'[DEBUG] Frame {fn} - Step 5: Validation failed, using adding_four_points fallback')
                     t_af2 = time.perf_counter()
                     ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                     parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af2) * 1000.0
@@ -6832,8 +5765,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     best_meta_copy['validation_error'] = validation_error or 'Added four points (fallback)'
                     _push(step5_outputs, best_meta_copy)
             else:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {fn} - No valid candidate found in Step 4, using fallback adding_four_points')
                 t_af3 = time.perf_counter()
                 ordered_kps = adding_four_points(orig_kps, frame_store, fn, template_len, cached_edges=cached_edges, frame_img=frame)
                 parts_ms['step5_fallback_add4'] = parts_ms.get('step5_fallback_add4', 0.0) + (time.perf_counter() - t_af3) * 1000.0
@@ -6853,8 +5784,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     found = fr
                     break
             if found is None:
-                if DEBUG_FLAG:
-                    print(f'[DEBUG] Frame {fn} not found in original JSON, skipping')
                 continue
             found['keypoints'] = ordered_kps
             found.pop('original_index', None)
