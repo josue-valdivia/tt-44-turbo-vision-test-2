@@ -1,15 +1,15 @@
 [
   {
-    "frame_id": 140,
-    "match_idx": 1,
+    "frame_id": 545,
+    "match_idx": 0,
     "candidate_idx": 0,
     "candidate": [
-      17,
-      19,
-      16,
-      14
+      13,
+      15,
+      30,
+      31
     ],
-    "avg_distance": 5.4,
+    "avg_distance": 0.71,
     "reordered_keypoints": [
       [
         0.0,
@@ -65,7 +65,7 @@
       ],
       [
         1279.0,
-        82.61818181818182
+        115.45454545454545
       ],
       [
         0.0,
@@ -81,7 +81,7 @@
       ],
       [
         387.6505791505791,
-        596.7837837837837
+        620.4247104247104
       ],
       [
         0.0,
@@ -109,7 +109,7 @@
       ],
       [
         0.0,
-        152.61818181818182
+        107.45454545454545
       ],
       [
         0.0,
@@ -143,85 +143,78 @@
     "decision": "right",
     "added_four_point": true,
     "step4_1": {
-      "frame_number": 140,
+      "frame_number": 545,
       "has_h": true,
       "p5": [
-        -2456,
-        785
+        -2495,
+        714
       ],
       "p29": [
-        2191,
-        543
+        4239,
+        778
       ],
-      "Ey": 657.3332043388073,
-      "Fy": 590.7254218467517,
-      "best_aay": 739,
-      "best_bby": 646,
-      "best_white_rate": 0.5961820851688693,
-      "kkp5": [
-        -2941.087848026041,
-        952.8554885585784
-      ],
-      "kkp29": [
-        2281.361285558799,
-        573.1152466325502
-      ],
+      "Ey": 737.492627519313,
+      "Fy": 749.6879449386857,
+      "best_aay": null,
+      "best_bby": null,
+      "best_white_rate": null,
+      "kkp5": null,
+      "kkp29": null,
       "profile": {
-        "homography_red_ms": 0.29255199478939176,
-        "edges_dilate_ms": 18.308023994904943,
-        "green_search_ms": 108.0659029976232,
-        "kkp_intersect_ms": 0.03929100057575852,
-        "total_ms": 126.81131999124773
+        "homography_red_ms": 0.2696240117074922,
+        "total_ms": 0.29015299514867365,
+        "edges_dilate_ms": 10.341528002754785
       },
       "H": [
         [
-          2.222066588324148,
-          -0.14486009334576413,
-          -973.5951439244423
+          2.745689063856452,
+          -0.5507004025920298,
+          -773.0774752479325
         ],
         [
-          -0.028014392463060256,
-          0.10236394657395469,
-          271.61984146456797
+          -0.00798292606239155,
+          0.23348853548957213,
+          167.73725890652207
         ],
         [
-          0.00013342765301426943,
-          -0.0008349827658468374,
+          -4.6323418197789464e-05,
+          -0.0008010053082459297,
           1.0
         ]
-      ]
+      ],
+      "skipped": "red line outside image range"
     },
     "step4_2": {},
     "step4_3": {
-      "frame_number": 140,
+      "frame_number": 545,
       "did_line_draw": true,
       "kkp4": null,
       "kkp12": null,
       "kkp28": [
-        1742.0234658345303,
-        406.9194711662654
+        3485.824948459028,
+        521.0055427668019
       ],
       "kkp20": [
-        1338.6832176049568,
-        424.6394402307446
+        2592.0,
+        515.0
       ],
       "profile": {
-        "edges_dilate_ms": 13.395713991485536,
-        "homography_red_ms": 0.36724300298374146,
-        "AB_search_ms": 0.8932010096032172,
+        "edges_dilate_ms": 6.996955009526573,
+        "homography_red_ms": 0.30421400151681155,
+        "AB_search_ms": 0.8577209955547005,
         "AB_coarse_candidates": 81,
         "AB_refine_candidates": 9,
         "AB_best_white_rate": 0.0,
-        "CD_search_ms": 2.2401720052585006,
+        "CD_search_ms": 0.8435130002908409,
         "CD_coarse_candidates": 81,
-        "CD_refine_candidates": 25,
-        "CD_best_white_rate": 0.9575289575289575,
-        "EF_search_ms": 1.2041629961458966,
-        "EF_best_white_rate": 0.8217054263565892,
-        "total_ms": 18.14936198934447
+        "CD_refine_candidates": 9,
+        "CD_best_white_rate": 0.0,
+        "EF_search_ms": 0.8275800064438954,
+        "EF_best_white_rate": 0.0,
+        "total_ms": 9.86253100563772
       }
     },
-    "score": 0.82,
+    "score": 0.75,
     "validation_passed": false,
     "fallback": true,
     "validation_error": "Added four points (fallback)"

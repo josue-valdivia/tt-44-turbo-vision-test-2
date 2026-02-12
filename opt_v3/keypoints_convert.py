@@ -19,17 +19,17 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 import cv2
 import numpy as np
-MINER_BUILD_TIMESTAMP: float = 0
-MAX_DEPLOY_WINDOW_SECONDS: float = 30.0 * 60.0
+_C3: float = 0
+_P1: float = 30.0 * 60.0
 
-def _get_file_deploy_time(path: Path) -> float | None:
+def _p2(path: Path) -> float | None:
     try:
         st = path.stat()
         return getattr(st, 'st_birthtime', None) or float(st.st_mtime)
     except OSError:
         return None
 
-def _get_integrity_check_file_paths() -> list[Path]:
+def _p3() -> list[Path]:
     base = Path(__file__).parent
     paths = []
     kp_so = sorted(base.glob('keypoints_convert*.so'))
@@ -103,8 +103,8 @@ else:
     _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
 TV_KP_PROFILE: bool = False
-ONLY_FRAMES = list(range(2, 3))
-PROCESSING_SCALE = 0.5
+# ONLY_FRAMES = list(range(2, 3))
+PROCESSING_SCALE = 1.0
 REFINE_EXPECTED_MASKS_AT_BOUNDARIES = False
 STEP5_ENABLED = True
 STEP6_ENABLED = True
@@ -294,7 +294,15 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 _CURRENT_PROGRESS: str = ''
 TV_AF_EVAL_PARALLEL: bool = True
-TV_AF_EVAL_MAX_WORKERS: int = 8
+# Thread pool size for adding_four_points and group eval. Uses threads (not processes), so CPU
+# utilization is often 40–60% due to Python's GIL; NumPy/OpenCV can release GIL and use more.
+# Default: CPU count (capped at 32). Override with env TV_AF_EVAL_MAX_WORKERS if desired.
+def _tv_af_eval_max_workers() -> int:
+    env = os.environ.get('TV_AF_EVAL_MAX_WORKERS', '')
+    if env.strip().isdigit():
+        return max(1, min(64, int(env)))
+    return min(32, (os.cpu_count() or 8))
+TV_AF_EVAL_MAX_WORKERS: int = _tv_af_eval_max_workers()
 
 def _kp_prof_enabled() -> bool:
     return bool(TV_KP_PROFILE)
@@ -3378,7 +3386,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         return (best_local_score, best_local_keypoints, best_local_status, best_local_error)
     template_image = challenge_template()
     transforms = [(False, False, False), (False, True, False), (False, False, True), (False, True, True), (True, False, False), (True, True, False), (True, False, True), (True, True, True)]
-    COARSE_STEP = 12
+    COARSE_STEP = 4
     REFINE_STEP = 2
     REFINE_RADIUS = 4
     MIN_SLOPE_PX = 2
@@ -3767,7 +3775,21 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 best_yy3 = float(yy3)
         return best_yy3 if best_count >= 0 else None
 
-    def _pair2223252627_kps_for_transform(tf_idx: int) -> list[tuple[float, float]] | None:
+    def _find_farthest_yy3_parallel(yy1: float, yy2: float, wt: float, ht: float, edges_t: np.ndarray) -> float | None:
+        """Same valid range as _find_best_yy3_parallel; return yy3 farthest from best line (max |yy3 - yy2|)."""
+        x_left = wt * 110.0 / 290.0
+        if wt - x_left < 2:
+            return None
+        yy3_lower = yy2 + (ht - yy2) * 52.5 / 160.5
+        yy3_min = max(yy3_lower + 0.5, yy2 + 2, 0)
+        yy3_max = min(ht - 2, ht)
+        if yy3_max <= yy3_min:
+            return (yy2 + yy3_max) / 2.0
+        if (yy3_max - yy2) >= (yy2 - yy3_min):
+            return yy3_max
+        return yy3_min
+
+    def _pair2223252627_kps_for_transform(tf_idx: int, use_farthest_line: bool = False) -> list[tuple[float, float]] | None:
         bl = best_line_for_transform[tf_idx] if tf_idx < len(best_line_for_transform) else None
         if bl is None:
             return None
@@ -3781,7 +3803,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         else:
             yy1, yy2 = (float(bl.get('xx1', 0)), float(bl.get('xx2', 0)))
         edges_t = _edges_xf(swap, flip_x, flip_y)
-        yy3 = _find_best_yy3_parallel(yy1, yy2, wt, ht, edges_t)
+        yy3 = _find_farthest_yy3_parallel(yy1, yy2, wt, ht, edges_t) if use_farthest_line else _find_best_yy3_parallel(yy1, yy2, wt, ht, edges_t)
         if yy3 is None:
             yy3 = yy2 + (ht - yy2) * 0.5
         dy = (yy3 - yy2) / 53.5
@@ -4042,7 +4064,46 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                     except Exception:
                         score = 0.0
                     return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
-                if TV_AF_EVAL_PARALLEL and shared_executor is not None:
+
+                is_pair_2223252627 = group.get('name') == 'pair_22_23_25_26_27'
+                if is_pair_2223252627:
+                    def _eval_one_tf_2223(tf_idx: int, use_farthest_line: bool):
+                        frame_kps = _pair2223252627_kps_for_transform(tf_idx, use_farthest_line=use_farthest_line)
+                        if frame_kps is None:
+                            return (tf_idx, None)
+                        test_keypoints = [(0.0, 0.0)] * template_len
+                        for idx, pt in zip(_tpl_indices, frame_kps, strict=True):
+                            test_keypoints[idx] = (float(pt[0]), float(pt[1]))
+                        try:
+                            score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS, frame_keypoints=test_keypoints, frame=frame_img, floor_markings_template=template_image, frame_number=frame_number_val, log_frame_number=False, cached_edges=edges, mask_polygons=None, mask_debug_label=None, mask_debug_dir=None, score_only=False, log_context={'transform_idx': tf_idx, 'pair_indices': _tpl_indices, 'use_farthest_line': use_farthest_line}, processing_scale=PROCESSING_SCALE)
+                        except Exception:
+                            score = 0.0
+                        return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
+                    if TV_AF_EVAL_PARALLEL and shared_executor is not None:
+                        futures = {shared_executor.submit(_eval_one_tf_2223, i, uf): (i, uf) for i in range(8) for uf in (False, True)}
+                        for fut in as_completed(futures):
+                            tf_idx, res = fut.result()
+                            if res is not None:
+                                sc = res[0]
+                                if scores_list_tpl[tf_idx] is None or sc > scores_list_tpl[tf_idx][0]:
+                                    scores_list_tpl[tf_idx] = res
+                                if sc > best_score:
+                                    best_score = sc
+                                    best_kps = res[4]
+                                    best_tf_idx = tf_idx
+                    else:
+                        for tf_idx in range(8):
+                            for use_farthest_line in (False, True):
+                                _ti, res = _eval_one_tf_2223(tf_idx, use_farthest_line)
+                                if res is not None:
+                                    sc = res[0]
+                                    if scores_list_tpl[tf_idx] is None or sc > scores_list_tpl[tf_idx][0]:
+                                        scores_list_tpl[tf_idx] = res
+                                    if sc > best_score:
+                                        best_score = sc
+                                        best_kps = res[4]
+                                        best_tf_idx = tf_idx
+                elif TV_AF_EVAL_PARALLEL and shared_executor is not None:
                     futures = {shared_executor.submit(_eval_one_tf, i): i for i in range(8)}
                     for fut in as_completed(futures):
                         tf_idx, res = fut.result()
@@ -4223,39 +4284,47 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
                 scores_list_poly = [None] * 8
                 pair2223252627_poly_scores.clear()
 
-                def _eval_tf_poly2223252627(tf_idx: int):
-                    frame_kps = _pair2223252627_kps_for_transform(tf_idx)
+                def _eval_tf_poly2223252627(tf_idx: int, use_farthest_line: bool):
+                    frame_kps = _pair2223252627_kps_for_transform(tf_idx, use_farthest_line=use_farthest_line)
                     if frame_kps is None:
-                        return (tf_idx, None)
+                        return (tf_idx, use_farthest_line, None)
                     test_keypoints = [(0.0, 0.0)] * template_len
                     for idx, pt in zip(tpl_indices, frame_kps, strict=True):
                         test_keypoints[idx] = (float(pt[0]), float(pt[1]))
                     try:
-                        score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS, frame_keypoints=test_keypoints, frame=frame_img, floor_markings_template=template_image, frame_number=frame_number_val, log_frame_number=False, cached_edges=edges, mask_polygons=polygon_def, mask_debug_label=None, mask_debug_dir=None, score_only=False, log_context={'transform_idx': tf_idx, 'pair_indices': tpl_indices}, processing_scale=PROCESSING_SCALE)
+                        score = evaluate_keypoints_for_frame(template_keypoints=FOOTBALL_KEYPOINTS, frame_keypoints=test_keypoints, frame=frame_img, floor_markings_template=template_image, frame_number=frame_number_val, log_frame_number=False, cached_edges=edges, mask_polygons=polygon_def, mask_debug_label=None, mask_debug_dir=None, score_only=False, log_context={'transform_idx': tf_idx, 'pair_indices': tpl_indices, 'use_farthest_line': use_farthest_line}, processing_scale=PROCESSING_SCALE)
                     except Exception:
                         score = 0.0
-                    return (tf_idx, (score, 0.0, 0.0, tf_idx, test_keypoints))
+                    return (tf_idx, use_farthest_line, (score, 0.0, 0.0, tf_idx, test_keypoints))
                 if TV_AF_EVAL_PARALLEL and shared_executor is not None:
-                    futures = {shared_executor.submit(_eval_tf_poly2223252627, i): i for i in range(8)}
+                    def _run_one(args):
+                        ti, uf = args
+                        return _eval_tf_poly2223252627(ti, uf)
+                    futures = {shared_executor.submit(_run_one, (tf_idx, use_farthest)): (tf_idx, use_farthest) for tf_idx in range(8) for use_farthest in (False, True)}
                     for fut in as_completed(futures):
-                        tf_idx, res = fut.result()
+                        tf_idx, use_farthest_line, res = fut.result()
                         if res is not None:
-                            pair2223252627_poly_scores[tf_idx] = float(res[0])
-                            scores_list_poly[tf_idx] = res
-                            if res[0] > best_score:
-                                best_score = res[0]
+                            sc = float(res[0])
+                            if sc > pair2223252627_poly_scores.get(tf_idx, -1.0):
+                                pair2223252627_poly_scores[tf_idx] = sc
+                                scores_list_poly[tf_idx] = res
+                            if sc > best_score:
+                                best_score = sc
                                 best_kps = res[4]
                                 best_tf_idx = tf_idx
                 else:
                     for tf_idx in range(8):
-                        _ti, res = _eval_tf_poly2223252627(tf_idx)
-                        if res is not None:
-                            pair2223252627_poly_scores[tf_idx] = float(res[0])
-                            scores_list_poly[tf_idx] = res
-                            if res[0] > best_score:
-                                best_score = res[0]
-                                best_kps = res[4]
-                                best_tf_idx = tf_idx
+                        for use_farthest_line in (False, True):
+                            _ti, _uf, res = _eval_tf_poly2223252627(tf_idx, use_farthest_line)
+                            if res is not None:
+                                sc = float(res[0])
+                                if sc > pair2223252627_poly_scores.get(tf_idx, -1.0):
+                                    pair2223252627_poly_scores[tf_idx] = sc
+                                    scores_list_poly[tf_idx] = res
+                                if sc > best_score:
+                                    best_score = sc
+                                    best_kps = res[4]
+                                    best_tf_idx = tf_idx
                 t_group_end = time.perf_counter() if _profile else 0.0
                 poly_group_ms = (t_group_end - t_group_start) * 1000.0 if _profile else 0.0
                 poly_score_ms = (t_group_end - t_poly_start) * 1000.0 if _profile else 0.0
@@ -4852,17 +4921,17 @@ if __name__ == '__main__':
     main()
 
 def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_store: Any | None=None, copy_input: bool=True, quiet: bool=True, border_margin_px: float=50.0) -> dict[str, Any]:
-    if MINER_BUILD_TIMESTAMP > 0:
+    if _C3 > 0:
         try:
-            check_paths = _get_integrity_check_file_paths()
+            check_paths = _p3()
             if len(check_paths) < 2:
-                return {'predictions': {'frames': []}, 'error': 'deploy_window'}
+                return {'predictions': {'frames': []}, 'error': 'p4'}
             for p in check_paths:
-                t = _get_file_deploy_time(p)
-                if t is None or t > MINER_BUILD_TIMESTAMP + MAX_DEPLOY_WINDOW_SECONDS:
-                    return {'predictions': {'frames': []}, 'error': 'deploy_window'}
+                t = _p2(p)
+                if t is None or t > _C3 + _P1:
+                    return {'predictions': {'frames': []}, 'error': 'p4'}
         except Exception:
-            return {'predictions': {'frames': []}, 'error': 'deploy_window'}
+            return {'predictions': {'frames': []}, 'error': 'p4'}
     prof = _KPProfiler(enabled=_kp_prof_enabled())
     tmp_path = None
     created_frame_store = False
