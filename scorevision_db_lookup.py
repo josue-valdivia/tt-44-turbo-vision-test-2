@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Look up sub-URLs by HOTKEY from Scorevision R2 index databases.
-Given a HOTKEY and N, finds the last up to N sub-URLs containing that HOTKEY
-from each of the 4 databases, fetches each evaluation JSON, extracts payload
-fields, and writes full URLs and extracted data to a log file.
+Look up sub-URLs by two HOTKEYs (me, other) from Scorevision R2 index databases.
+Finds last N sub-URLs per DB for each hotkey, fetches evaluation JSONs,
+and reports comparison of evaluation.score for common task_ids.
 """
 
 import argparse
@@ -16,8 +15,9 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 # --- Hardcoded: change these and run the script ---
-HOTKEY = "5CArRkhHGAUw8B4EZZWWwCBMWNQ7WMWQUDi8cQVCZYK4Ui95"
-N = 2  # Max number of sub-URLs to take per database (last N)
+HOTKEY_ME = "5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p"
+HOTKEY_OTHER = "5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE"
+N = 5  # From each DB, take the last N sub-URLs (search from the end of the index)
 
 # Database index URLs
 DB_INDEX_URLS = [
@@ -47,7 +47,9 @@ def fetch_index(index_url: str) -> List[str]:
 
 
 def find_suburls_with_hotkey(suburls: List[str], hotkey: str, n: int) -> List[str]:
-    """Filter sub-URLs that contain hotkey and return the last up to N."""
+    """Filter sub-URLs that contain hotkey; return the last N from the list (search from the end)."""
+    if n <= 0:
+        return []
     matching = [s for s in suburls if hotkey in s]
     return matching[-n:] if len(matching) >= n else matching
 
@@ -63,37 +65,120 @@ def extract_payload_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extract task_id, run.*, evaluation.keypoints.*, evaluation.objects.*, evaluation.score."""
     run = payload.get("run") or {}
     ev = payload.get("evaluation") or {}
-    keypoints = ev.get("keypoints") or {}
+    acc_breakdown = ev.get("acc_breakdown") or {}
+    keypoints = acc_breakdown.get("keypoints") or {}
     # JSON uses "objects" (plural); support "object" as fallback
-    objects = ev.get("objects") or ev.get("object") or {}
+    objects = acc_breakdown.get("objects") or acc_breakdown.get("object") or {}
 
     latency_ms = run.get("latency_ms")
     if latency_ms is not None:
         try:
-            latency_ms = float(latency_ms)
+            latency_ms = int(round(float(latency_ms)))
         except (TypeError, ValueError):
-            latency_ms = 0.0
+            latency_ms = 0
     else:
-        latency_ms = 0.0
+        latency_ms = 0
+
+    def _round4(v: Any) -> Any:
+        if v is None:
+            return None
+        try:
+            return round(float(v), 4)
+        except (TypeError, ValueError):
+            return v
+
+    obj_bbox = objects.get("bbox_placement")
+    obj_cat = objects.get("categorisation")
+    obj_team = objects.get("team")
+    obj_enum = objects.get("enumeration")
+    obj_track = objects.get("tracking_stability")
+    obj_scores = [obj_bbox, obj_cat, obj_team, obj_enum, obj_track]
+    obj_nums = [float(x) for x in obj_scores if x is not None]
+    objects_avg = round(sum(obj_nums) / len(obj_nums), 4) if obj_nums else None
 
     return {
         "task_id": payload.get("task_id"),
         "run.error": run.get("error"),
         "run.responses_key": run.get("responses_key"),
         "run.latency_ms": latency_ms,
-        "evaluation.keypoints.floor_markings_alignment": keypoints.get("floor_markings_alignment"),
-        "evaluation.objects.bbox_placement": objects.get("bbox_placement"),
-        "evaluation.objects.categorisation": objects.get("categorisation"),
-        "evaluation.objects.team": objects.get("team"),
-        "evaluation.objects.enumeration": objects.get("enumeration"),
-        "evaluation.objects.tracking_stability": objects.get("tracking_stability"),
-        "evaluation.score": ev.get("score"),
+        "evaluation.keypoints.floor_markings_alignment": _round4(keypoints.get("floor_markings_alignment")),
+        "evaluation.objects.bbox_placement": _round4(obj_bbox),
+        "evaluation.objects.categorisation": _round4(obj_cat),
+        "evaluation.objects.team": _round4(obj_team),
+        "evaluation.objects.enumeration": _round4(obj_enum),
+        "evaluation.objects.tracking_stability": _round4(obj_track),
+        "evaluation.objects.score": objects_avg,
+        "evaluation.score": _round4(ev.get("score")),
     }
+
+
+def collect_url_pairs(hotkey: str, n: int) -> List[Tuple[str, str]]:
+    """Collect (evaluation full URL, base URL) for the last N sub-URLs from each DB that contain hotkey."""
+    url_pairs: List[Tuple[str, str]] = []
+    for index_url in DB_INDEX_URLS:
+        base_url = get_base_url(index_url)
+        try:
+            suburls = fetch_index(index_url)
+        except (URLError, HTTPError, ValueError, json.JSONDecodeError):
+            continue
+        last_n = find_suburls_with_hotkey(suburls, hotkey, n)
+        for sub in last_n:
+            full_url = base_url + sub if not sub.startswith("http") else sub
+            url_pairs.append((full_url, base_url))
+    return url_pairs
+
+
+def fetch_task_scores(
+    url_pairs: List[Tuple[str, str]], logger: logging.Logger, label: str
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Fetch each evaluation JSON from url_pairs; return task_id -> {score, evaluation_url, ...}.
+    If same task_id appears multiple times, later entry overwrites.
+    """
+    by_task: Dict[int, Dict[str, Any]] = {}
+    for full_url, base_url in url_pairs:
+        try:
+            data = fetch_json(full_url)
+        except (URLError, HTTPError, ValueError, json.JSONDecodeError) as e:
+            logger.info("[%s] ERROR fetching %s: %s", label, full_url[:80], e)
+            continue
+        if not isinstance(data, list) or len(data) == 0:
+            continue
+        payload = data[0].get("payload") if isinstance(data[0], dict) else None
+        if not payload:
+            continue
+        fields = extract_payload_fields(payload)
+        task_id = fields.get("task_id")
+        if task_id is None:
+            continue
+        try:
+            task_id = int(task_id)
+        except (TypeError, ValueError):
+            continue
+        score = fields.get("evaluation.score")
+        video_url = None
+        responses_key = fields.get("run.responses_key")
+        if responses_key and isinstance(responses_key, str):
+            try:
+                responses_full = (base_url + responses_key) if not responses_key.startswith("http") else responses_key
+                resp_data = fetch_json(responses_full)
+                if isinstance(resp_data, dict):
+                    video_url = resp_data.get("video_url")
+            except (URLError, HTTPError, ValueError, json.JSONDecodeError):
+                pass
+        by_task[task_id] = {
+            "score": score,
+            "evaluation_url": full_url,
+            "base_url": base_url,
+            "fields": fields,
+            "video_url": video_url,
+        }
+    return by_task
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Find last N sub-URLs containing HOTKEY from each Scorevision DB and log full URLs."
+        description="Compare evaluation scores for two hotkeys on common task_ids."
     )
     parser.add_argument(
         "-o",
@@ -109,12 +194,13 @@ def main():
     )
     args = parser.parse_args()
 
-    hotkey = HOTKEY.strip()
+    hotkey_me = HOTKEY_ME.strip()
+    hotkey_other = HOTKEY_OTHER.strip()
     n = max(0, N)
     log_path = args.output
 
     # Setup file logging
-    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_fmt = logging.Formatter("%(message)s")
     file_handler.setFormatter(file_fmt)
@@ -131,60 +217,105 @@ def main():
 
     logger.info("")
     logger.info("=== Scorevision DB lookup %s ===", datetime.now(timezone.utc).isoformat())
-    logger.info("HOTKEY: %s  N: %d", hotkey, n)
+    logger.info("HOTKEY_ME:    %s", hotkey_me)
+    logger.info("HOTKEY_OTHER: %s", hotkey_other)
+    logger.info("N per DB:     %d (last N links from each database)", n)
     logger.info("")
 
-    # Collect (evaluation full URL, base URL for this DB) so we can build responses_key full URL
-    url_pairs: List[Tuple[str, str]] = []
+    # Collect URL pairs for both hotkeys
+    logger.info("--- Collecting evaluation URLs ---")
+    url_pairs_me = collect_url_pairs(hotkey_me, n)
+    url_pairs_other = collect_url_pairs(hotkey_other, n)
+    logger.info("Me:    %d evaluation URLs", len(url_pairs_me))
+    logger.info("Other: %d evaluation URLs", len(url_pairs_other))
+    logger.info("")
 
-    for db_idx, index_url in enumerate(DB_INDEX_URLS, start=1):
-        base_url = get_base_url(index_url)
-        try:
-            suburls = fetch_index(index_url)
-        except (URLError, HTTPError, ValueError, json.JSONDecodeError) as e:
-            logger.info("[DB%d] ERROR fetching index: %s", db_idx, e)
-            continue
+    # Fetch evaluation JSONs and build task_id -> record
+    logger.info("--- Fetching evaluation JSONs ---")
+    me_by_task = fetch_task_scores(url_pairs_me, logger, "me")
+    other_by_task = fetch_task_scores(url_pairs_other, logger, "other")
+    logger.info("Me:    %d tasks with scores", len(me_by_task))
+    logger.info("Other: %d tasks with scores", len(other_by_task))
+    logger.info("")
 
-        last_n = find_suburls_with_hotkey(suburls, hotkey, n)
-        logger.info("[DB%d] Found %d sub-URLs containing HOTKEY (requested last N=%d)", db_idx, len(last_n), n)
+    # Common task_ids
+    common_task_ids = sorted(set(me_by_task) & set(other_by_task))
+    logger.info("--- Comparison report (common task_id) ---")
+    logger.info("Common task_ids: %d", len(common_task_ids))
+    logger.info("")
 
-        for sub in last_n:
-            full_url = base_url + sub if not sub.startswith("http") else sub
-            url_pairs.append((full_url, base_url))
-            logger.info("%s", full_url)
+    me_wins = 0
+    other_wins = 0
+    ties = 0
 
-        if not last_n:
-            logger.info("[DB%d] (none)", db_idx)
-        logger.info("")
+    for task_id in common_task_ids:
+        me_rec = me_by_task[task_id]
+        other_rec = other_by_task[task_id]
+        score_me = me_rec["score"]
+        score_other = other_rec["score"]
+        # Compare; treat None as -1 so it loses
+        s_me = score_me if score_me is not None else -1.0
+        s_other = score_other if score_other is not None else -1.0
+        if s_me > s_other:
+            winner = "me"
+            me_wins += 1
+        elif s_other > s_me:
+            winner = "other"
+            other_wins += 1
+        else:
+            winner = "tie"
+            ties += 1
 
-    # Fetch each evaluation JSON and extract payload fields
-    logger.info("--- Extracted payload fields ---")
-    for full_url, base_url in url_pairs:
-        logger.info("")
-        logger.info("Evaluation URL: %s", full_url)
-        try:
-            data = fetch_json(full_url)
-        except (URLError, HTTPError, ValueError, json.JSONDecodeError) as e:
-            logger.info("  ERROR fetching: %s", e)
-            continue
-        if not isinstance(data, list) or len(data) == 0:
-            logger.info("  ERROR: expected non-empty JSON array")
-            continue
-        payload = data[0].get("payload") if isinstance(data[0], dict) else None
-        if not payload:
-            logger.info("  ERROR: no payload in first element")
-            continue
-        fields = extract_payload_fields(payload)
-        for k, v in fields.items():
-            logger.info("  %s: %s", k, v)
-        # run.responses_key as full URL
-        responses_key = fields.get("run.responses_key")
-        if responses_key and isinstance(responses_key, str):
-            responses_full = (base_url + responses_key) if not responses_key.startswith("http") else responses_key
-            logger.info("  run.responses_key (full URL): %s", responses_full)
+        # Outcome: You win / You lose / Tie (me = you) with icon
+        outcome = ("✅ You win" if winner == "me" else
+                   "❌ You lose" if winner == "other" else
+                   "🤝 Tie")
+        logger.info("task_id %s  ->  %s", task_id, outcome)
+        me_f = me_rec.get("fields") or {}
+        other_f = other_rec.get("fields") or {}
+        me_responses_key = me_f.get("run.responses_key")
+        other_responses_key = other_f.get("run.responses_key")
+        me_responses_url = (me_rec.get("base_url", "") + me_responses_key) if me_responses_key and not str(me_responses_key).startswith("http") else (me_responses_key or "")
+        other_responses_url = (other_rec.get("base_url", "") + other_responses_key) if other_responses_key and not str(other_responses_key).startswith("http") else (other_responses_key or "")
+        logger.info("  me responses URL:     %s", me_responses_url or "(not found)")
+        logger.info("  other responses URL:  %s", other_responses_url or "(not found)")
+        video_url = me_rec.get("video_url") or other_rec.get("video_url")
+        logger.info("  video URL:            %s", video_url if video_url else "(not found)")
+
+        # Table: keypoint, bbox, total for you vs other
+        keypoint_me = me_f.get("evaluation.keypoints.floor_markings_alignment")
+        keypoint_other = other_f.get("evaluation.keypoints.floor_markings_alignment")
+        bbox_me = me_f.get("evaluation.objects.score")
+        bbox_other = other_f.get("evaluation.objects.score")
+        total_me = me_f.get("evaluation.score")
+        total_other = other_f.get("evaluation.score")
+
+        def _cell(v):
+            return "None" if v is None else str(v)
+
+        run_error_me = me_f.get("run.error")
+        run_error_other = other_f.get("run.error")
+        zero_me = total_me is None or total_me == 0
+        zero_other = total_other is None or total_other == 0
+        err_suffix_me = " <- [Error] %s" % (run_error_me,) if (zero_me and run_error_me) else ""
+        err_suffix_other = " <- [Error] %s" % (run_error_other,) if (zero_other and run_error_other) else ""
+
+        logger.info("  +----------------+-----------+-----------+-----------+")
+        logger.info("  |                | keypoint  | bbox      | total     |")
+        logger.info("  +----------------+-----------+-----------+-----------+")
+        logger.info("  | you            | %-9s | %-9s | %-9s |%s", _cell(keypoint_me), _cell(bbox_me), _cell(total_me), err_suffix_me)
+        logger.info("  | other          | %-9s | %-9s | %-9s |%s", _cell(keypoint_other), _cell(bbox_other), _cell(total_other), err_suffix_other)
+        logger.info("  +----------------+-----------+-----------+-----------+")
+        if task_id != common_task_ids[-1]:
+            logger.info("  " + "=" * 76)
 
     logger.info("")
-    logger.info("Total evaluation URLs: %d", len(url_pairs))
+    logger.info("--- Summary ---")
+    logger.info("Common tasks: %d", len(common_task_ids))
+    logger.info("Me wins:      %d", me_wins)
+    logger.info("Other wins:   %d", other_wins)
+    logger.info("Ties:         %d", ties)
+    logger.info("")
     logger.info("Log file: %s", log_path)
 
     return 0
