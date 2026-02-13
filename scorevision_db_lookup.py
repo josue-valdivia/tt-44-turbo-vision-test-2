@@ -192,7 +192,20 @@ def main():
         action="store_true",
         help="Log to stderr as well",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--keypoints",
+        action="store_true",
+        help="Compare keypoint scores (floor_markings_alignment) instead of total",
+    )
+    mode_group.add_argument(
+        "--bbox",
+        action="store_true",
+        help="Compare bbox (objects) scores and show all 5 factor scores",
+    )
     args = parser.parse_args()
+
+    compare_mode = "bbox" if args.bbox else ("keypoints" if args.keypoints else "total")
 
     hotkey_me = HOTKEY_ME.strip()
     hotkey_other = HOTKEY_OTHER.strip()
@@ -220,6 +233,7 @@ def main():
     logger.info("HOTKEY_ME:    %s", hotkey_me)
     logger.info("HOTKEY_OTHER: %s", hotkey_other)
     logger.info("N per DB:     %d (last N links from each database)", n)
+    logger.info("Compare mode: %s", compare_mode)
     logger.info("")
 
     # Collect URL pairs for both hotkeys
@@ -247,12 +261,24 @@ def main():
     me_wins = 0
     other_wins = 0
     ties = 0
+    sum_me = 0.0
+    sum_other = 0.0
 
     for task_id in common_task_ids:
         me_rec = me_by_task[task_id]
         other_rec = other_by_task[task_id]
-        score_me = me_rec["score"]
-        score_other = other_rec["score"]
+        me_f = me_rec.get("fields") or {}
+        other_f = other_rec.get("fields") or {}
+        # Score to compare depends on mode
+        if compare_mode == "keypoints":
+            score_me = me_f.get("evaluation.keypoints.floor_markings_alignment")
+            score_other = other_f.get("evaluation.keypoints.floor_markings_alignment")
+        elif compare_mode == "bbox":
+            score_me = me_f.get("evaluation.objects.score")
+            score_other = other_f.get("evaluation.objects.score")
+        else:
+            score_me = me_rec["score"]
+            score_other = other_rec["score"]
         # Compare; treat None as -1 so it loses
         s_me = score_me if score_me is not None else -1.0
         s_other = score_other if score_other is not None else -1.0
@@ -265,14 +291,14 @@ def main():
         else:
             winner = "tie"
             ties += 1
+        sum_me += s_me
+        sum_other += s_other
 
         # Outcome: You win / You lose / Tie (me = you) with icon
         outcome = ("✅ You win" if winner == "me" else
                    "❌ You lose" if winner == "other" else
                    "🤝 Tie")
         logger.info("task_id %s  ->  %s", task_id, outcome)
-        me_f = me_rec.get("fields") or {}
-        other_f = other_rec.get("fields") or {}
         me_responses_key = me_f.get("run.responses_key")
         other_responses_key = other_f.get("run.responses_key")
         me_responses_url = (me_rec.get("base_url", "") + me_responses_key) if me_responses_key and not str(me_responses_key).startswith("http") else (me_responses_key or "")
@@ -282,17 +308,15 @@ def main():
         video_url = me_rec.get("video_url") or other_rec.get("video_url")
         logger.info("  video URL:            %s", video_url if video_url else "(not found)")
 
-        # Table: keypoint, bbox, total for you vs other
+        def _cell(v):
+            return "None" if v is None else str(v)
+
         keypoint_me = me_f.get("evaluation.keypoints.floor_markings_alignment")
         keypoint_other = other_f.get("evaluation.keypoints.floor_markings_alignment")
         bbox_me = me_f.get("evaluation.objects.score")
         bbox_other = other_f.get("evaluation.objects.score")
         total_me = me_f.get("evaluation.score")
         total_other = other_f.get("evaluation.score")
-
-        def _cell(v):
-            return "None" if v is None else str(v)
-
         run_error_me = me_f.get("run.error")
         run_error_other = other_f.get("run.error")
         zero_me = total_me is None or total_me == 0
@@ -300,12 +324,39 @@ def main():
         err_suffix_me = " <- [Error] %s" % (run_error_me,) if (zero_me and run_error_me) else ""
         err_suffix_other = " <- [Error] %s" % (run_error_other,) if (zero_other and run_error_other) else ""
 
-        logger.info("  +----------------+-----------+-----------+-----------+")
-        logger.info("  |                | keypoint  | bbox      | total     |")
-        logger.info("  +----------------+-----------+-----------+-----------+")
-        logger.info("  | you            | %-9s | %-9s | %-9s |%s", _cell(keypoint_me), _cell(bbox_me), _cell(total_me), err_suffix_me)
-        logger.info("  | other          | %-9s | %-9s | %-9s |%s", _cell(keypoint_other), _cell(bbox_other), _cell(total_other), err_suffix_other)
-        logger.info("  +----------------+-----------+-----------+-----------+")
+        # Table depends on compare mode
+        if compare_mode == "bbox":
+            # All 5 bbox factor scores + bbox (avg) score
+            bbox_place_me = me_f.get("evaluation.objects.bbox_placement")
+            bbox_place_other = other_f.get("evaluation.objects.bbox_placement")
+            cat_me = me_f.get("evaluation.objects.categorisation")
+            cat_other = other_f.get("evaluation.objects.categorisation")
+            team_me = me_f.get("evaluation.objects.team")
+            team_other = other_f.get("evaluation.objects.team")
+            enum_me = me_f.get("evaluation.objects.enumeration")
+            enum_other = other_f.get("evaluation.objects.enumeration")
+            track_me = me_f.get("evaluation.objects.tracking_stability")
+            track_other = other_f.get("evaluation.objects.tracking_stability")
+            logger.info("  +--------+----------------+----------------+----------+--------------+--------------------+-------------+")
+            logger.info("  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |")
+            logger.info("  +--------+----------------+----------------+----------+--------------+--------------------+-------------+")
+            logger.info("  | you    | %-14s | %-14s | %-8s | %-12s | %-18s | %-11s |%s", _cell(bbox_place_me), _cell(cat_me), _cell(team_me), _cell(enum_me), _cell(track_me), _cell(bbox_me), err_suffix_me)
+            logger.info("  | other  | %-14s | %-14s | %-8s | %-12s | %-18s | %-11s |%s", _cell(bbox_place_other), _cell(cat_other), _cell(team_other), _cell(enum_other), _cell(track_other), _cell(bbox_other), err_suffix_other)
+            logger.info("  +--------+----------------+----------------+----------+--------------+--------------------+-------------+")
+        elif compare_mode == "keypoints":
+            logger.info("  +----------------+-----------+")
+            logger.info("  |                | keypoint  |")
+            logger.info("  +----------------+-----------+")
+            logger.info("  | you            | %-9s |%s", _cell(keypoint_me), err_suffix_me)
+            logger.info("  | other          | %-9s |%s", _cell(keypoint_other), err_suffix_other)
+            logger.info("  +----------------+-----------+")
+        else:
+            logger.info("  +----------------+-----------+-----------+-----------+")
+            logger.info("  |                | keypoint  | bbox      | total     |")
+            logger.info("  +----------------+-----------+-----------+-----------+")
+            logger.info("  | you            | %-9s | %-9s | %-9s |%s", _cell(keypoint_me), _cell(bbox_me), _cell(total_me), err_suffix_me)
+            logger.info("  | other          | %-9s | %-9s | %-9s |%s", _cell(keypoint_other), _cell(bbox_other), _cell(total_other), err_suffix_other)
+            logger.info("  +----------------+-----------+-----------+-----------+")
         if task_id != common_task_ids[-1]:
             logger.info("  " + "=" * 76)
 
@@ -315,6 +366,18 @@ def main():
     logger.info("Me wins:      %d", me_wins)
     logger.info("Other wins:   %d", other_wins)
     logger.info("Ties:         %d", ties)
+    if common_task_ids:
+        n = len(common_task_ids)
+        avg_me = sum_me / n
+        avg_other = sum_other / n
+        mode_label = {"total": "total", "keypoints": "keypoints", "bbox": "bbox"}[compare_mode]
+        logger.info("Average (%s) score - you: %s, other: %s", mode_label, round(avg_me, 4), round(avg_other, 4))
+        if avg_me > avg_other:
+            logger.info("  -> You win on average")
+        elif avg_other > avg_me:
+            logger.info("  -> Other wins on average")
+        else:
+            logger.info("  -> Tie on average")
     logger.info("")
     logger.info("Log file: %s", log_path)
 

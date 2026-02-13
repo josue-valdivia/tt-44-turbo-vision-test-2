@@ -1,8 +1,9 @@
 
-=== Scorevision DB lookup 2026-02-13T04:46:49.004694+00:00 ===
+=== Scorevision DB lookup 2026-02-13T05:05:17.414184+00:00 ===
 HOTKEY_ME:    5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p
 HOTKEY_OTHER: 5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE
 N per DB:     5 (last N links from each database)
+Compare mode: bbox
 
 --- Collecting evaluation URLs ---
 Me:    20 evaluation URLs
@@ -13,165 +14,190 @@ Me:    20 tasks with scores
 Other: 20 tasks with scores
 
 --- Comparison report (common task_id) ---
-Common task_ids: 17
+Common task_ids: 16
 
 task_id 51684  ->  ✅ You win
   me responses URL:     https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530493-0f8612f4ff2765229bc9f531458329bf0e291914aa81690f53cb0398cab48716.json
   other responses URL:  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530393-0f8612f4ff2765229bc9f531458329bf0e291914aa81690f53cb0398cab48716.json
   video URL:            https://scoredata.me/chunks/66b52fed9e444b4ea503d055c16009.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.6438    | 0.8717    | 0.8375    |
-  | other          | 0.6571    | 0.6528    | 0.6535    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9505         | 0.9505         | 0.8556   | 0.9744       | 0.6273             | 0.8717      |
+  | other  | 0.7508         | 0.6143         | 0.503    | 0.819        | 0.5771             | 0.6528      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
-task_id 51699  ->  ❌ You lose
+task_id 51699  ->  ✅ You win
   me responses URL:     https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531315-0cc5030695aca02da6975cd6af8f190d8234a0b113199657990ee585bdd172ae.json
   other responses URL:  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531307-0cc5030695aca02da6975cd6af8f190d8234a0b113199657990ee585bdd172ae.json
   video URL:            https://scoredata.me/chunks/58f348882e424700ad267003aa8fd8.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.5983    | 0.8145    | 0.7821    |
-  | other          | 0.6302    | 0.8129    | 0.7855    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9387         | 0.8988         | 0.7467   | 0.9387       | 0.5496             | 0.8145      |
+  | other  | 0.9152         | 0.8304         | 0.6961   | 0.9468       | 0.6762             | 0.8129      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51762  ->  ❌ You lose
   me responses URL:     https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531936-4e2f0ead5aff37baf2fe64990ca33b2774859b492c6fcb6c393982277a04b566.json
   other responses URL:  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531922-4e2f0ead5aff37baf2fe64990ca33b2774859b492c6fcb6c393982277a04b566.json
   video URL:            https://scoredata.me/chunks/8e439afe7ed24e898d354a0028476f.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.0       | 0.0       | 0.0       | <- [Error] ❌ There was a problem during prediction: Response payload is not completed: <ContentLengthError: 400, message='Not enough data to satisfy content length header.'>
-  | other          | 0.7236    | 0.7316    | 0.7304    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.0            | 0.0            | 0.0      | 0.0          | 0.0                | 0.0         | <- [Error] ❌ There was a problem during prediction: Response payload is not completed: <ContentLengthError: 400, message='Not enough data to satisfy content length header.'>
+  | other  | 0.8376         | 0.7873         | 0.7432   | 0.8561       | 0.4336             | 0.7316      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51818  ->  ✅ You win
   me responses URL:     https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530998-445c40d862f90c55a963349d5de6d49337a697ae6e1421e5eb4b13ce0d506a40.json
   other responses URL:  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530987-445c40d862f90c55a963349d5de6d49337a697ae6e1421e5eb4b13ce0d506a40.json
   video URL:            https://scoredata.me/chunks/a103623cf9f44cd1a561529f768fcb.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.6888    | 0.8769    | 0.8487    |
-  | other          | 0.714     | 0.8381    | 0.8195    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 1.0            | 1.0            | 0.8056   | 1.0          | 0.5791             | 0.8769      |
+  | other  | 0.9359         | 0.9359         | 0.7917   | 0.9744       | 0.5525             | 0.8381      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51838  ->  ✅ You win
   me responses URL:     https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531843-62cb3b63347eef28f4e501e581ea4ac4e8a93eb7c85c822f1b2b4376a38bb1fc.json
   other responses URL:  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531831-62cb3b63347eef28f4e501e581ea4ac4e8a93eb7c85c822f1b2b4376a38bb1fc.json
   video URL:            https://scoredata.me/chunks/e544c17339424b47b414e039bf41ef.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.8695    | 0.8162    | 0.8242    |
-  | other          | 0.8185    | 0.6976    | 0.7158    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.8905         | 0.8121         | 0.8651   | 0.9028       | 0.6105             | 0.8162      |
+  | other  | 0.6964         | 0.6964         | 0.7484   | 0.8073       | 0.5396             | 0.6976      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51910  ->  ✅ You win
   me responses URL:     https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530717-b786cddbc174d5a4017221ae22cce5383e9dc68b5728c7d75c09ff08be2b2def.json
   other responses URL:  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530707-b786cddbc174d5a4017221ae22cce5383e9dc68b5728c7d75c09ff08be2b2def.json
   video URL:            https://scoredata.me/chunks/89991524e0fb4f89b84eb8c8f4849f.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.5058    | 0.8666    | 0.8125    |
-  | other          | 0.4978    | 0.7515    | 0.7135    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.963          | 0.9182         | 0.7288   | 0.9704       | 0.7528             | 0.8666      |
+  | other  | 0.8299         | 0.741          | 0.6573   | 0.9185       | 0.6109             | 0.7515      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51932  ->  ✅ You win
   me responses URL:     https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531615-dc670f06447c0728c8fd68ec7170d43d2852f2a483992bb1a62acee8debe761d.json
   other responses URL:  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531601-dc670f06447c0728c8fd68ec7170d43d2852f2a483992bb1a62acee8debe761d.json
   video URL:            https://scoredata.me/chunks/ebfe38878dbd419785a81a75308eb3.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.7757    | 0.7577    | 0.7604    |
-  | other          | 0.7249    | 0.7182    | 0.7192    |
-  ============================================================================
-task_id 51938  ->  ✅ You win
-  me responses URL:     https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530636-aaaa60f04d8588dac2b7362edfaa049a1281e1791251315be0f106f2f8588b05.json
-  other responses URL:  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530624-aaaa60f04d8588dac2b7362edfaa049a1281e1791251315be0f106f2f8588b05.json
-  video URL:            https://scoredata.me/chunks/05e97948674b4e15aa185e50facb4b.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.6677    | 0.8621    | 0.833     |
-  | other          | 0.7019    | 0.7762    | 0.7651    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.8791         | 0.8067         | 0.4733   | 0.8914       | 0.7379             | 0.7577      |
+  | other  | 0.7763         | 0.7763         | 0.4571   | 0.8703       | 0.7109             | 0.7182      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51951  ->  🤝 Tie
   me responses URL:     https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531938-e62e4810b74aab1add71cbe686f80fe909cb3eae3a90bd3e55216bca672d856b.json
   other responses URL:  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531924-e62e4810b74aab1add71cbe686f80fe909cb3eae3a90bd3e55216bca672d856b.json
   video URL:            https://scoredata.me/chunks/847fa1915066451eb6ef2b1afb1059.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.5505    | 0.7786    | 0.7444    |
-  | other          | 0.5507    | 0.7786    | 0.7444    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.8658         | 0.8658         | 0.6699   | 0.8873       | 0.6043             | 0.7786      |
+  | other  | 0.8658         | 0.8658         | 0.6699   | 0.8873       | 0.6043             | 0.7786      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 51952  ->  ✅ You win
   me responses URL:     https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530476-66efb692f07ab90717568a1951f8fff9c87ddf46bc5ff3893f3e71d599157667.json
   other responses URL:  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530380-66efb692f07ab90717568a1951f8fff9c87ddf46bc5ff3893f3e71d599157667.json
   video URL:            https://scoredata.me/chunks/a6d5d2480f02420cac2175129823e6.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.7763    | 0.8501    | 0.839     |
-  | other          | 0.7944    | 0.7643    | 0.7688    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9733         | 0.9733         | 0.7      | 0.9733       | 0.6306             | 0.8501      |
+  | other  | 0.8741         | 0.8741         | 0.6222   | 0.8741       | 0.5769             | 0.7643      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 52059  ->  ✅ You win
   me responses URL:     https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531933-92244866fea4d44c7eb3d9cb9d2b93c1663ae8f15a230683e36862e9d09167d9.json
   other responses URL:  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531913-92244866fea4d44c7eb3d9cb9d2b93c1663ae8f15a230683e36862e9d09167d9.json
   video URL:            https://scoredata.me/chunks/e261e7c0fa924336bed553921f3533.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.4015    | 0.8895    | 0.8163    |
-  | other          | 0.4152    | 0.8143    | 0.7544    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9565         | 0.9275         | 0.8381   | 0.9565       | 0.7686             | 0.8895      |
+  | other  | 0.8611         | 0.8056         | 0.7421   | 0.8889       | 0.7738             | 0.8143      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 52063  ->  ❌ You lose
   me responses URL:     https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531590-98d4a54f7e66799117d136915130d1f8b0479e234084fc304649eeb83509bc24.json
   other responses URL:  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531569-98d4a54f7e66799117d136915130d1f8b0479e234084fc304649eeb83509bc24.json
   video URL:            https://scoredata.me/chunks/eda725109a694339ae8a159efa2e6a.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.4606    | 0.65      | 0.6216    |
-  | other          | 0.52      | 0.8706    | 0.818     |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.6106         | 0.5894         | 0.5252   | 0.8219       | 0.7029             | 0.65        |
+  | other  | 0.9088         | 0.9088         | 0.9004   | 0.9318       | 0.7033             | 0.8706      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 52067  ->  ❌ You lose
   me responses URL:     https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007532581-adf524cab988a0a49e8933fef00b6b9a351c4b2820175eabd9169576e602c2a1.json
   other responses URL:  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007532537-adf524cab988a0a49e8933fef00b6b9a351c4b2820175eabd9169576e602c2a1.json
   video URL:            https://scoredata.me/chunks/84589664b5d841868065cb3a029f34.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.5341    | 0.4409    | 0.4549    |
-  | other          | 0.5625    | 0.6878    | 0.669     |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.3282         | 0.3282         | 0.2832   | 0.4912       | 0.7738             | 0.4409      |
+  | other  | 0.6553         | 0.6188         | 0.6171   | 0.7929       | 0.7552             | 0.6878      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 52178  ->  ✅ You win
   me responses URL:     https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007531653-b9c84a5a57921d22f6939922526c0cd4106c6555c0e4b7be53c932113e125644.json
   other responses URL:  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007531627-b9c84a5a57921d22f6939922526c0cd4106c6555c0e4b7be53c932113e125644.json
   video URL:            https://scoredata.me/chunks/8ac5f5b1eecd4a6db369b7859a2653.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.6479    | 0.7735    | 0.7547    |
-  | other          | 0.6398    | 0.7534    | 0.7363    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.7476         | 0.726          | 0.6941   | 0.7691       | 0.9307             | 0.7735      |
+  | other  | 0.7162         | 0.6859         | 0.6238   | 0.8101       | 0.9309             | 0.7534      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
 task_id 52191  ->  ✅ You win
   me responses URL:     https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007530199-6df5098479ac5b6cccdc16ea4d762d0eec4d78a6e62fcf14b981819299096d83.json
   other responses URL:  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007530079-6df5098479ac5b6cccdc16ea4d762d0eec4d78a6e62fcf14b981819299096d83.json
   video URL:            https://scoredata.me/chunks/eb3b54f7c6e343daab4fc8894c20c3.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.3029    | 0.9091    | 0.8182    |
-  | other          | 0.3369    | 0.8929    | 0.8095    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9576         | 0.9361         | 0.8981   | 0.9576       | 0.7962             | 0.9091      |
+  | other  | 0.9475         | 0.926          | 0.8981   | 0.9475       | 0.7453             | 0.8929      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
-task_id 52241  ->  ❌ You lose
+task_id 52241  ->  🤝 Tie
   me responses URL:     https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007532128-1c9d90da9b2aab92fc0cf47a731e2456bfdd7d8903cac09b33a7b4a16fab600a.json
   other responses URL:  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007532116-1c9d90da9b2aab92fc0cf47a731e2456bfdd7d8903cac09b33a7b4a16fab600a.json
   video URL:            https://scoredata.me/chunks/c9a55de860f44b5c843b199202bb20.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.7895    | 0.8359    | 0.8289    |
-  | other          | 0.8025    | 0.8359    | 0.8309    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9515         | 0.9277         | 0.7733   | 0.9515       | 0.5754             | 0.8359      |
+  | other  | 0.9515         | 0.9277         | 0.7733   | 0.9515       | 0.5754             | 0.8359      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
   ============================================================================
-task_id 52344  ->  ❌ You lose
+task_id 52344  ->  🤝 Tie
   me responses URL:     https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p/responses/007532196-59483b0375cdb1dacf9b90436f3a26d8f0278077f3a6aa85769b753af57331ad.json
   other responses URL:  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE/responses/007532184-59483b0375cdb1dacf9b90436f3a26d8f0278077f3a6aa85769b753af57331ad.json
   video URL:            https://scoredata.me/chunks/3720e2f158654c8c8a705cf0c4a793.mp4
-  |                | keypoint  | bbox      | total     |
-  +----------------+-----------+-----------+-----------+
-  | you            | 0.7837    | 0.8315    | 0.8244    |
-  | other          | 0.7927    | 0.8315    | 0.8257    |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  |        | bbox_placement | categorisation | team     | enumeration  | tracking_stability | objects_avg |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
+  | you    | 0.9714         | 0.8941         | 0.648    | 0.9905       | 0.6536             | 0.8315      |
+  | other  | 0.9714         | 0.8941         | 0.648    | 0.9905       | 0.6536             | 0.8315      |
+  +--------+----------------+----------------+----------+--------------+--------------------+-------------+
 
 --- Summary ---
-Common tasks: 17
+Common tasks: 16
 Me wins:      10
-Other wins:   6
-Ties:         1
+Other wins:   3
+Ties:         3
+Average (bbox) score - you: 0.7477, other: 0.777
+  -> Other wins on average
 
 Log file: scorevision_db_lookup.log
