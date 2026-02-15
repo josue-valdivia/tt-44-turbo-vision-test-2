@@ -15,8 +15,12 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 # --- Hardcoded: change these and run the script ---
-HOTKEY_ME = "5F76gZjXR9eWT9JdP5t7g3Xov5rth3vFSm2JA1pW3HwtV89p"
-HOTKEY_OTHER = "5Dz6RT7fzqhjFaQrmmHoegVajtUrZ8zhQ4NkP9yMU8ShAkCE"
+# 5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5
+# 5C88LjaemXPRWREGDyF4g7VN7qnnuBQuhwFnSUMK9sfbiqJU
+HOTKEY_ME = "5C88LjaemXPRWREGDyF4g7VN7qnnuBQuhwFnSUMK9sfbiqJU"
+# 5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm
+# 5HdX72NK2sdUes3UMvUy37EJHNKkuGuu6w2ratvWLvki4ab8
+HOTKEY_OTHER = "5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm"
 N = 5  # From each DB, take the last N sub-URLs (search from the end of the index)
 
 # Database index URLs
@@ -258,11 +262,43 @@ def main():
     logger.info("Common task_ids: %d", len(common_task_ids))
     logger.info("")
 
+    # When no common tasks, output simple one-line per task so user can manually check
+    if not common_task_ids:
+        def _score4(v):
+            return "%.4f" % v if v is not None else "None"
+        logger.info("--- Me: all task_ids (score, evaluation_url) ---")
+        for tid in sorted(me_by_task.keys()):
+            rec = me_by_task[tid]
+            logger.info("  task_id %s  score=%s  %s", tid, _score4(rec["score"]), rec.get("evaluation_url", ""))
+        logger.info("")
+        logger.info("--- Other: all task_ids (score, evaluation_url) ---")
+        for tid in sorted(other_by_task.keys()):
+            rec = other_by_task[tid]
+            logger.info("  task_id %s  score=%s  %s", tid, _score4(rec["score"]), rec.get("evaluation_url", ""))
+        zero_me = [(tid, rec) for tid, rec in me_by_task.items() if rec.get("score") is None or rec.get("score") == 0]
+        zero_other = [(tid, rec) for tid, rec in other_by_task.items() if rec.get("score") is None or rec.get("score") == 0]
+        if zero_me or zero_other:
+            logger.info("")
+            logger.info("--- 0-scoring cases ---")
+            for tid, rec in sorted(zero_me, key=lambda x: x[0]):
+                err = (rec.get("fields") or {}).get("run.error")
+                logger.info("  me   task_id %s  %s  %s", tid, ("[Error] %s" % err) if err else "", rec.get("evaluation_url", ""))
+            for tid, rec in sorted(zero_other, key=lambda x: x[0]):
+                err = (rec.get("fields") or {}).get("run.error")
+                logger.info("  other task_id %s  %s  %s", tid, ("[Error] %s" % err) if err else "", rec.get("evaluation_url", ""))
+        logger.info("")
+        logger.info("--- Summary ---")
+        logger.info("Common tasks: 0 (no overlap - see above for full task lists)")
+        logger.info("")
+        logger.info("Log file: %s", log_path)
+        return 0
+
     me_wins = 0
     other_wins = 0
     ties = 0
     sum_me = 0.0
     sum_other = 0.0
+    valid_count = 0  # tasks where both sides have non-zero score (excluded from average/wins)
 
     for task_id in common_task_ids:
         me_rec = me_by_task[task_id]
@@ -282,17 +318,23 @@ def main():
         # Compare; treat None as -1 so it loses
         s_me = score_me if score_me is not None else -1.0
         s_other = score_other if score_other is not None else -1.0
-        if s_me > s_other:
-            winner = "me"
-            me_wins += 1
-        elif s_other > s_me:
-            winner = "other"
-            other_wins += 1
+        both_valid = (score_me is not None and score_me != 0 and
+                      score_other is not None and score_other != 0)
+        if both_valid:
+            if s_me > s_other:
+                winner = "me"
+                me_wins += 1
+            elif s_other > s_me:
+                winner = "other"
+                other_wins += 1
+            else:
+                winner = "tie"
+                ties += 1
+            sum_me += s_me
+            sum_other += s_other
+            valid_count += 1
         else:
-            winner = "tie"
-            ties += 1
-        sum_me += s_me
-        sum_other += s_other
+            winner = "me" if s_me > s_other else ("other" if s_other > s_me else "tie")
 
         # Outcome: You win / You lose / Tie (me = you) with icon
         outcome = ("✅ You win" if winner == "me" else
@@ -366,12 +408,11 @@ def main():
     logger.info("Me wins:      %d", me_wins)
     logger.info("Other wins:   %d", other_wins)
     logger.info("Ties:         %d", ties)
-    if common_task_ids:
-        n = len(common_task_ids)
-        avg_me = sum_me / n
-        avg_other = sum_other / n
+    if common_task_ids and valid_count > 0:
+        avg_me = sum_me / valid_count
+        avg_other = sum_other / valid_count
         mode_label = {"total": "total", "keypoints": "keypoints", "bbox": "bbox"}[compare_mode]
-        logger.info("Average (%s) score - you: %s, other: %s", mode_label, round(avg_me, 4), round(avg_other, 4))
+        logger.info("Average (%s) score - you: %s, other: %s (excl. %d tasks with 0-score)", mode_label, round(avg_me, 4), round(avg_other, 4), len(common_task_ids) - valid_count)
         if avg_me > avg_other:
             logger.info("  -> You win on average")
         elif avg_other > avg_me:
@@ -379,6 +420,20 @@ def main():
         else:
             logger.info("  -> Tie on average")
     logger.info("")
+
+    # Extract 0-scoring cases at the end (total evaluation.score is 0 or None)
+    zero_me = [(tid, rec) for tid, rec in me_by_task.items() if rec.get("score") is None or rec.get("score") == 0]
+    zero_other = [(tid, rec) for tid, rec in other_by_task.items() if rec.get("score") is None or rec.get("score") == 0]
+    if zero_me or zero_other:
+        logger.info("--- 0-scoring cases ---")
+        for tid, rec in sorted(zero_me, key=lambda x: x[0]):
+            err = (rec.get("fields") or {}).get("run.error")
+            logger.info("  me   task_id %s  %s  %s", tid, ("[Error] %s" % err) if err else "", rec.get("evaluation_url", ""))
+        for tid, rec in sorted(zero_other, key=lambda x: x[0]):
+            err = (rec.get("fields") or {}).get("run.error")
+            logger.info("  other task_id %s  %s  %s", tid, ("[Error] %s" % err) if err else "", rec.get("evaluation_url", ""))
+        logger.info("")
+
     logger.info("Log file: %s", log_path)
 
     return 0
