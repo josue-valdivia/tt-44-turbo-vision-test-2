@@ -17,6 +17,9 @@ __pycache__/
 *.jpeg
 *.webp
 
+# Ignore generated step JSON files
+keypoint_step_*.json
+
 # ✅ Exceptions with paths
 !opt_v3/football_pitch_template.png
 !football_pitch_template.png
