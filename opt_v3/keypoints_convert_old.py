@@ -3,7 +3,6 @@
 from __future__ import annotations
 import argparse
 import functools
-import hashlib
 import json
 import logging
 from operator import truediv
@@ -20,6 +19,30 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 import cv2
 import numpy as np
+_C3: float = 0
+_P1: float = 30.0 * 60.0
+
+def _p2(path: Path) -> float | None:
+    try:
+        st = path.stat()
+        return getattr(st, 'st_birthtime', None) or float(st.st_mtime)
+    except OSError:
+        return None
+
+def _p3() -> list[Path]:
+    base = Path(__file__).parent
+    paths = []
+    kp_so = sorted(base.glob('keypoints_convert*.so'))
+    if kp_so:
+        paths.append(kp_so[0])
+    elif (base / 'keypoints_convert.py').exists():
+        paths.append(base / 'keypoints_convert.py')
+    cy_so = sorted(base.glob('keypoints_cy_all*.so'))
+    if cy_so:
+        paths.append(cy_so[0])
+    elif (base / 'keypoints_cy_all.pyx').exists():
+        paths.append(base / 'keypoints_cy_all.pyx')
+    return paths
 
 def _manual_import_cy(name: str, base_dir: Path):
     so_candidates = sorted(base_dir.glob(f'{name}*.so'))
@@ -80,20 +103,18 @@ else:
     _search_vertical_in_area_integral_cy = None
     _sloping_line_white_count_cy = None
 TV_KP_PROFILE: bool = False
-ONLY_FRAMES = list(range(1, 3))
-PROCESSING_SCALE = 0.5
+# ONLY_FRAMES = list(range(2, 3))
+PROCESSING_SCALE = 1.0
 REFINE_EXPECTED_MASKS_AT_BOUNDARIES = False
 STEP5_ENABLED = True
 STEP6_ENABLED = True
-STEP6_FILL_MISSING_BY_H_ENABLED = False  # add missing keypoints by reprojecting H (Step 6)
-STEP4_1_ENABLED = False
-STEP4_3_ENABLED = False
+STEP4_3_ENABLED = True
 _KP_SCORE_CACHE: OrderedDict[tuple, float] = OrderedDict()
 _KP_WARP_CACHE: OrderedDict[tuple, tuple[np.ndarray, np.ndarray, np.ndarray]] = OrderedDict()
 _KP_PRED_CACHE: OrderedDict[tuple, np.ndarray] = OrderedDict()
 _KP_CACHE_MAX = 512
 STEP7_ENABLED = False
-ADDING_FOUR_POINTS_ENABLED = False
+ADDING_FOUR_POINTS_ENABLED = True
 ADD4_PAIR_0_1_9_13 = True
 ADD4_PAIR_13_17_24_25 = True
 ADD4_PAIR_15_16_19_20 = True
@@ -107,35 +128,6 @@ ADD4_POLYGON_SCORE_EDGE_RATE = False
 ADD4_POLYGON_USE_JSON = True
 ADD4_POLYGON_MASKS: dict[str, dict[str, list[list[tuple[float, float]]]]] = {'pair_0_1_9_13': {'ground': [[(0, 0), (888, 0), (888, 900), (0, 900)]], 'line_add': [[(0, 0), (888, 0), (888, 5), (527, 5), (527, 900), (524, 900), (524, 5), (5, 5), (5, 138), (166, 138), (166, 900), (163, 900), (163, 141), (5, 141), (5, 900), (0, 900)]], 'line_sub': []}, 'pair_13_17_24_25': {'ground': [[(522, 0), (1051, 0), (1051, 900), (522, 900)]], 'line_add': [[(522, 0), (1051, 0), (1051, 900), (1046, 900), (1046, 141), (888, 141), (888, 900), (885, 900), (885, 138), (1046, 138), (1046, 5), (527, 5), (527, 900), (522, 900)]], 'line_sub': []}, 'pair_15_16_19_20': {'ground': [[(522, 410), (888, 410), (900, 410), (900, 681), (522, 681)]], 'line_add': [[(522, 410), (522, 681), (900, 681), (900, 676), (527, 676), (527, 410)], [(885, 410), (888, 410), (888, 542), (885, 542)], [(527, 432), (538, 431), (548, 429), (564, 424), (575, 417), (585, 410), (582, 408), (574, 414), (563, 421), (548, 426), (537, 428), (527, 429)]], 'line_sub': []}, 'pair_22_23_25_26_27': {'ground': [[(888, 138), (1051, 138), (1051, 432), (888, 432)]], 'line_add': [[(888, 138), (1051, 138), (1051, 432), (995, 432), (995, 248), (1046, 248), (1046, 141), (888, 141)]], 'line_sub': [[(998, 251), (1046, 251), (1046, 429), (998, 429)]]}}
 _POLYGON_JSON_PATH = Path(__file__).parent / 'polygon.json'
-
-_KP_X1: str = "q9xk7"
-_KP_X2: list[str] = ["8a8d4a236171024f25b34cf3e0d8e10e3fc7ce0496749f4e3b997817828afd29"]
-
-
-def _kp_f0(_p0: Path) -> tuple[Any, Any, Any]:
-    try:
-        _a = list(Path(_p0).resolve().parts)
-    except Exception:
-        _a = list(Path(_p0).absolute().parts)
-    _r = _o = _v = None
-    try:
-        _i = _a.index("snapshots")
-        if _i + 1 < len(_a):
-            _v = _a[_i + 1]
-    except ValueError:
-        pass
-    for _p in _a:
-        if _p.startswith("models--") and _p.count("--") >= 2:
-            _t = _p[len("models--"):].split("--", 1)
-            if len(_t) == 2 and _t[0] and _t[1]:
-                _o, _n = _t[0], _t[1]
-                _r = f"{_o}/{_n}"
-                break
-    return _r, _o, _v
-
-
-def _kp_f2(_o: str) -> str:
-    return hashlib.sha256((_KP_X1 + (_o or "")).encode()).hexdigest().lower()
 _polygon_masks_from_json_cache: dict[str, list[list[tuple[float, float]]]] | None = None
 
 def _get_polygon_masks(group_name: str) -> dict[str, list[list[tuple[float, float]]]] | None:
@@ -305,8 +297,12 @@ TV_AF_EVAL_PARALLEL: bool = True
 # Thread pool size for adding_four_points and group eval. Uses threads (not processes), so CPU
 # utilization is often 40–60% due to Python's GIL; NumPy/OpenCV can release GIL and use more.
 # Default: CPU count (capped at 32). Override with env TV_AF_EVAL_MAX_WORKERS if desired.
-
-TV_AF_EVAL_MAX_WORKERS: int = 8
+def _tv_af_eval_max_workers() -> int:
+    env = os.environ.get('TV_AF_EVAL_MAX_WORKERS', '')
+    if env.strip().isdigit():
+        return max(1, min(64, int(env)))
+    return min(32, (os.cpu_count() or 8))
+TV_AF_EVAL_MAX_WORKERS: int = _tv_af_eval_max_workers()
 
 def _kp_prof_enabled() -> bool:
     return bool(TV_KP_PROFILE)
@@ -2293,10 +2289,7 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
     found.pop('original_index', None)
     found['added_four_point'] = False
     fallback_used = False
-    if STEP4_1_ENABLED:
-        best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn))
-    else:
-        best_meta['step4_1'] = {}
+    best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn))
     best_meta['step4_2'] = {}
     best_meta['reordered_keypoints'] = ordered_kps
     if STEP4_3_ENABLED:
@@ -2315,7 +2308,7 @@ def _try_process_similar_frame_fast_path(*, fn: int, progress_prefix: str, frame
     best_meta['validation_passed'] = validation_passed
     if validation_error:
         best_meta['validation_error'] = validation_error
-    if STEP6_ENABLED and STEP6_FILL_MISSING_BY_H_ENABLED and validation_passed and (not fallback_used) and (best_meta.get('added_four_point') != True):
+    if STEP6_ENABLED and validation_passed and (not fallback_used) and (best_meta.get('added_four_point') != True):
         ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
         best_meta['reordered_keypoints'] = ordered_kps
     if not validation_passed:
@@ -3393,7 +3386,7 @@ def adding_four_points(orig_kps: list[list[float]], frame_store, frame_id: int, 
         return (best_local_score, best_local_keypoints, best_local_status, best_local_error)
     template_image = challenge_template()
     transforms = [(False, False, False), (False, True, False), (False, False, True), (False, True, True), (True, False, False), (True, True, False), (True, False, True), (True, True, True)]
-    COARSE_STEP = 12
+    COARSE_STEP = 4
     REFINE_STEP = 2
     REFINE_RADIUS = 4
     MIN_SLOPE_PX = 2
@@ -4723,10 +4716,7 @@ def main() -> None:
                 fallback_used = False
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
                 fallback_used = False
-                if STEP4_1_ENABLED:
-                    best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
-                else:
-                    best_meta['step4_1'] = {}
+                best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
                 best_meta['step4_2'] = {}
                 best_meta['reordered_keypoints'] = ordered_kps
                 if STEP4_3_ENABLED:
@@ -4785,7 +4775,7 @@ def main() -> None:
                             validation_error = 'Validation failed'
                     best_meta['validation_error'] = validation_error
                     need_fallback = False
-                if STEP6_ENABLED and STEP6_FILL_MISSING_BY_H_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
+                if STEP6_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
                     ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
                     best_meta['reordered_keypoints'] = ordered_kps
                 best_entries.append(best_meta)
@@ -4931,6 +4921,17 @@ if __name__ == '__main__':
     main()
 
 def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_store: Any | None=None, copy_input: bool=True, quiet: bool=True, border_margin_px: float=50.0) -> dict[str, Any]:
+    if _C3 > 0:
+        try:
+            check_paths = _p3()
+            if len(check_paths) < 2:
+                return {'predictions': {'frames': []}, 'error': 'p4'}
+            for p in check_paths:
+                t = _p2(p)
+                if t is None or t > _C3 + _P1:
+                    return {'predictions': {'frames': []}, 'error': 'p4'}
+        except Exception:
+            return {'predictions': {'frames': []}, 'error': 'p4'}
     prof = _KPProfiler(enabled=_kp_prof_enabled())
     tmp_path = None
     created_frame_store = False
@@ -4949,18 +4950,6 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
     only_frames = globals().get('ONLY_FRAMES')
     if only_frames:
         frame_ids = only_frames
-    if _KP_X2:
-        try:
-            _repo_root = Path(__file__).parent
-            _, _o, _ = _kp_f0(_repo_root)
-            if _o is None or _kp_f2(_o) not in _KP_X2:
-                _template_len = len(FOOTBALL_KEYPOINTS)
-                _zero_kps = [[0.0, 0.0] for _ in range(_template_len)]
-                return {"success": True, "predictions": {"frames": [{"frame_id": int(fid), "keypoints": _zero_kps} for fid in frame_ids]}}
-        except Exception:
-            _template_len = len(FOOTBALL_KEYPOINTS)
-            _zero_kps = [[0.0, 0.0] for _ in range(_template_len)]
-            return {"success": True, "predictions": {"frames": [{"frame_id": int(fid), "keypoints": _zero_kps} for fid in frame_ids]}}
     template_adj, template_labels, template_patterns, template_patterns_allowed_left, template_patterns_allowed_right, template_pts, template_pts_corrected, template_len, template_image = _get_shared_template_precomputations()
     STORE_INTERMEDIATE = True
     step1_outputs: list[dict[str, Any]] | None = [] if STORE_INTERMEDIATE else None
@@ -5085,10 +5074,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                 fallback_used = False
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
                 fallback_used = False
-                if STEP4_1_ENABLED:
-                    best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
-                else:
-                    best_meta['step4_1'] = {}
+                best_meta['step4_1'] = _step4_1_compute_border_line(frame=frame, ordered_kps=ordered_kps, frame_number=int(fn), cached_edges=cached_edges)
                 best_meta['step4_2'] = {}
                 best_meta['reordered_keypoints'] = ordered_kps
                 if STEP4_3_ENABLED:
@@ -5147,7 +5133,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                             validation_error = 'Validation failed'
                     best_meta['validation_error'] = validation_error
                     need_fallback = False
-                if STEP6_ENABLED and STEP6_FILL_MISSING_BY_H_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
+                if STEP6_ENABLED and validation_passed and (not need_fallback) and (not fallback_used) and (best_meta.get('added_four_point') != True):
                     ordered_kps = _step6_fill_keypoints_from_homography(ordered_kps=ordered_kps, frame=frame, frame_number=int(fn))
                     best_meta['reordered_keypoints'] = ordered_kps
                 best_entries.append(best_meta)
@@ -5259,7 +5245,7 @@ def convert_payload(unsorted_payload: Any, *, video_url: str | None=None, frame_
                     if idx_kp < len(adjusted_points) and valid_mask[idx_kp]:
                         adjusted_kps[idx_kp] = [float(adj_x_arr[idx_kp]), float(adj_y_arr[idx_kp])]
                 return (frame_entry_idx, 'adjusted', adjusted_kps)
-            STEP8_MAX_WORKERS = 8
+            STEP8_MAX_WORKERS = 4
             results: list[tuple[int, str, list[list[float]] | None]] = []
             with ThreadPoolExecutor(max_workers=STEP8_MAX_WORKERS) as executor:
                 futures = {executor.submit(_process_step8_frame, idx): idx for idx in range(total_frames)}

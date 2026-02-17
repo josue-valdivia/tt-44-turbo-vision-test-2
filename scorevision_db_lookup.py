@@ -17,7 +17,7 @@ from urllib.error import URLError, HTTPError
 # --- Hardcoded: change these and run the script ---
 # 5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5
 # 5C88LjaemXPRWREGDyF4g7VN7qnnuBQuhwFnSUMK9sfbiqJU
-HOTKEY_ME = "5C88LjaemXPRWREGDyF4g7VN7qnnuBQuhwFnSUMK9sfbiqJU"
+HOTKEY_ME = "5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5"
 # 5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm
 # 5HdX72NK2sdUes3UMvUy37EJHNKkuGuu6w2ratvWLvki4ab8
 HOTKEY_OTHER = "5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm"
