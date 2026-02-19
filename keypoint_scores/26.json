@@ -2,14 +2,10 @@
   "video_id": "26",
   "keypoint_scores": [
     {
-      "frame": 129,
-      "score": 0.1737399635650943
-    },
-    {
-      "frame": 130,
-      "score": 0.14949441543840492
+      "frame": 11,
+      "score": 0.6214725500252556
     }
   ],
-  "avg_keypoints_score": 0.1616171895017496,
+  "avg_keypoints_score": 0.6214725500252556,
   "keypoints_errors": {}
 }

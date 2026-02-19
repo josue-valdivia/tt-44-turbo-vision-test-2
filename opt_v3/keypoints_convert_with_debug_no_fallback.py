@@ -151,21 +151,21 @@ else:
     _sloping_line_white_count_cy = None
 
 # Persistent seed for find_nearest_white across frames
-DEBUG_FLAG = False
+DEBUG_FLAG = True
 TV_KP_PROFILE: bool = False
-# ONLY_FRAMES = list(range(129, 131))
-STEP4_1_ENABLED = False         # border-line computation (red/green), kkp5/kkp29 and H for Step 4.9
-STEP4_3_ENABLED = False         # refine keypoints with AB/CD lines and H-projected (dilate + green lines)
+ONLY_FRAMES = list(range(223, 224))
+STEP4_1_ENABLED = True         # border-line computation (red/green), kkp5/kkp29 and H for Step 4.9
+STEP4_3_ENABLED = True         # refine keypoints with AB/CD lines and H-projected (dilate + green lines)
 STEP5_ENABLED = True           # score the ordered keypoints
 STEP6_ENABLED = True           # enable Step 6 phase
-STEP6_FILL_MISSING_ENABLED = False  # if True, fill missing keypoints using homography from Step 5 (adds e.g. corner KP 30)
+STEP6_FILL_MISSING_ENABLED = True  # if True, fill missing keypoints using homography from Step 5 (adds e.g. corner KP 30)
 
 # Per-frame cache for keypoint scoring results.
 _KP_SCORE_CACHE: OrderedDict[tuple, float] = OrderedDict()
 _KP_WARP_CACHE: OrderedDict[tuple, tuple[np.ndarray, np.ndarray, np.ndarray]] = OrderedDict()
 _KP_PRED_CACHE: OrderedDict[tuple, np.ndarray] = OrderedDict()
 _KP_CACHE_MAX = 512  # Increased from 256 for better cache hit rate
-STEP7_ENABLED = False           # interpolate keypoints for problematic frames
+STEP7_ENABLED = True           # interpolate keypoints for problematic frames
 ADD4_PAIR_0_1_9_13 = True
 ADD4_PAIR_13_17_24_25 = True
 ADD4_PAIR_15_16_19_20 = True
@@ -891,10 +891,14 @@ def _step4_1_compute_border_line(
     """
     Step 4.1: Compute H from input keypoints; project kp[5] and kp[29]; draw infinite red line.
     E = red line ∩ x=0, F = red line ∩ x=W-1. Search E.y in [Ey-20, Ey+20], F.y in [Fy-20, Fy+20]
-    for best 10px-width line (max white pixel rate in dilated image). Green line = best border line.
-    kkp[5] = infinitely extended green line ∩ line through H(kp[0]) and H(kp[4]).
-    kkp[29] = infinitely extended green line ∩ line through H(kp[24]) and H(kp[28]).
-    kp[0], kp[4], kp[24], kp[28] are obtained by projecting the template keypoints using H (from input keypoints).
+    for best 15px-width line (max white pixel rate in dilated image). Green line = best border line.
+    Also computes Step-4.3 style green EF lines (left/right) and uses them here:
+    kkp[5] = infinitely extended border-green line ∩ left EF-green line.
+    kkp[29] = infinitely extended border-green line ∩ right EF-green line.
+    A middle-vertical green segment is searched around kp[13]-kp[16]:
+    - kkp[13], kkp[14], kkp[15] = nearest points on the infinite extension of that green line
+      from kp[13], kp[14], kp[15] (orthogonal projection).
+    - kkp[16] = intersection of the infinite middle-vertical green line and the border-green line.
     Returns kkp5, kkp29 and H (as list of lists) for Step 4.9; Step 4.9 reuses H as H1 to avoid recomputing.
     """
     result: dict[str, Any] = {
@@ -909,6 +913,16 @@ def _step4_1_compute_border_line(
         "best_white_rate": None,
         "kkp5": None,
         "kkp29": None,
+        "kkp13": None,
+        "kkp14": None,
+        "kkp15": None,
+        "kkp16": None,
+        "ef_left_a": None,
+        "ef_left_b": None,
+        "ef_right_a": None,
+        "ef_right_b": None,
+        "seg_13_16_a": None,
+        "seg_13_16_b": None,
         "profile": {},
     }
     t_start = time.perf_counter()
@@ -977,6 +991,11 @@ def _step4_1_compute_border_line(
         result["Fy"] = float(Fy)
 
         result["profile"]["homography_red_ms"] = (time.perf_counter() - t_) * 1000.0
+        all_proj = cv2.perspectiveTransform(
+            np.array([[float(p[0]), float(p[1])] for p in FOOTBALL_KEYPOINTS_CORRECTED], dtype=np.float32).reshape(-1, 1, 2),
+            H_mat,
+        )
+        all_proj_list = [[float(all_proj[i][0][0]), float(all_proj[i][0][1])] for i in range(len(all_proj))]
 
         # Calculate green line only when any part of the red line is in the image range (y in [0, H-1])
         red_line_y_min = min(Ey, Fy)
@@ -1031,9 +1050,9 @@ def _step4_1_compute_border_line(
             cv2.line(edge_only_dilated, pt_E_red, pt_F_red, (0, 0, 255), 1)
         result["profile"]["edges_dilate_ms"] = (time.perf_counter() - t_) * 1000.0
 
-        # 10px width white rate for border line (0, y_left) -> (W-1, y_right)
+        # 15px width white-pixel count for border line (0, y_left) -> (W-1, y_right)
         t_green = time.perf_counter()
-        LINE_WIDTH_PX_41 = 10
+        LINE_WIDTH_PX_41 = 15
         half_width_41 = LINE_WIDTH_PX_41 // 2
         LINE_SAMPLE_MAX_41 = 256
 
@@ -1043,27 +1062,8 @@ def _step4_1_compute_border_line(
         def _border_line_white_rate(y_left: float, y_right: float) -> float:
             ax, ay = 0.0, y_left
             bx, by = float(W_img - 1), y_right
-            
-            # Use Cython fast path if available
-            if _sloping_line_white_count_cy is not None and edges_dilated_flat is not None:
-                try:
-                    white, total = _sloping_line_white_count_cy(
-                        edges_dilated_flat,
-                        W_img,
-                        H_img,
-                        ax,
-                        ay,
-                        bx,
-                        by,
-                        half_width_41,
-                        LINE_SAMPLE_MAX_41,
-                    )
-                    return white / total if total > 0 else 0.0
-                except Exception:
-                    # Fallback to Python if Cython fails
-                    pass
-            
-            # Python fallback (original implementation)
+
+            # Python path: score by white-pixel count only in the band area under EF green line(s).
             L = float(np.hypot(bx - ax, by - ay))
             if L < 1.0:
                 return 0.0
@@ -1085,6 +1085,70 @@ def _step4_1_compute_border_line(
             qy_flat = qy_flat[valid]
             if qx_flat.size == 0:
                 return 0.0
+            if ef_left is not None or ef_right is not None:
+                under_mask = np.zeros(qx_flat.shape, dtype=bool)
+                if ef_left is not None:
+                    (lax, lay), (lbx, lby) = ef_left
+                    if abs(float(lbx - lax)) > 1e-9:
+                        y_left_line = float(lay) + (qx_flat.astype(np.float64) - float(lax)) * (
+                            (float(lby - lay)) / float(lbx - lax)
+                        )
+                        under_mask |= qy_flat.astype(np.float64) >= y_left_line
+                if ef_right is not None:
+                    (rax, ray), (rbx, rby) = ef_right
+                    if abs(float(rbx - rax)) > 1e-9:
+                        y_right_line = float(ray) + (qx_flat.astype(np.float64) - float(rax)) * (
+                            (float(rby - ray)) / float(rbx - rax)
+                        )
+                        under_mask |= qy_flat.astype(np.float64) >= y_right_line
+                qx_flat = qx_flat[under_mask]
+                qy_flat = qy_flat[under_mask]
+                if qx_flat.size == 0:
+                    return 0.0
+            linear = np.unique(qy_flat.astype(np.int64) * W_img + qx_flat.astype(np.int64))
+            qy_u = linear // W_img
+            qx_u = linear % W_img
+            white = int(np.count_nonzero(edges_dilated[qy_u, qx_u]))
+            return float(white)
+
+        def _line_segment_white_rate(ax: int, ay: int, bx: int, by: int, half_width: int = 5) -> float:
+            if _sloping_line_white_count_cy is not None and edges_dilated_flat is not None:
+                try:
+                    white, total = _sloping_line_white_count_cy(
+                        edges_dilated_flat,
+                        W_img,
+                        H_img,
+                        float(ax),
+                        float(ay),
+                        float(bx),
+                        float(by),
+                        half_width,
+                        LINE_SAMPLE_MAX_41,
+                    )
+                    return white / total if total > 0 else 0.0
+                except Exception:
+                    pass
+            L = float(np.hypot(float(bx - ax), float(by - ay)))
+            if L < 1.0:
+                return 0.0
+            n_steps = min(max(1, int(L) + 1), LINE_SAMPLE_MAX_41)
+            t = np.linspace(0, 1, n_steps, dtype=np.float64)
+            px = ax + t * (bx - ax)
+            py = ay + t * (by - ay)
+            perp_x = -(float(by) - float(ay)) / L
+            perp_y = (float(bx) - float(ax)) / L
+            qx_list: list[np.ndarray] = []
+            qy_list: list[np.ndarray] = []
+            for k in range(-half_width, half_width + 1):
+                qx_list.append(np.round(px + k * perp_x).astype(np.int32))
+                qy_list.append(np.round(py + k * perp_y).astype(np.int32))
+            qx_flat = np.concatenate(qx_list)
+            qy_flat = np.concatenate(qy_list)
+            valid = (qx_flat >= 0) & (qx_flat < W_img) & (qy_flat >= 0) & (qy_flat < H_img)
+            qx_flat = qx_flat[valid]
+            qy_flat = qy_flat[valid]
+            if qx_flat.size == 0:
+                return 0.0
             linear = np.unique(qy_flat.astype(np.int64) * W_img + qx_flat.astype(np.int64))
             qy_u = linear // W_img
             qx_u = linear % W_img
@@ -1092,50 +1156,132 @@ def _step4_1_compute_border_line(
             white = int(np.count_nonzero(edges_dilated[qy_u, qx_u]))
             return white / total if total else 0.0
 
-        # Search: E.y in [Ey-100, Ey+100], F.y in [Fy-100, Fy+100]. Coarse-to-fine + early exit to reduce time.
-        a_min = int(np.floor(Ey - 100.0))
-        a_max = int(np.ceil(Ey + 100.0))
-        b_min = int(np.floor(Fy - 100.0))
-        b_max = int(np.ceil(Fy + 100.0))
+        def _best_ef_line(idx_e: int, idx_f: int) -> tuple[tuple[int, int], tuple[int, int]] | None:
+            if idx_e >= len(all_proj_list) or idx_f >= len(all_proj_list):
+                return None
+            x_e, y_e = float(all_proj_list[idx_e][0]), float(all_proj_list[idx_e][1])
+            x_f, y_f = float(all_proj_list[idx_f][0]), float(all_proj_list[idx_f][1])
+            x_e_int, y_e_int = int(round(x_e)), int(round(y_e))
+            x_f_int, y_f_int = int(round(x_f)), int(round(y_f))
+            if abs(x_f_int - x_e_int) < 1 and abs(y_f_int - y_e_int) < 1:
+                return None
+
+            ef_a_y_min = y_e_int - 30
+            ef_a_y_max = y_e_int + 30
+            ef_b_y_min = y_f_int - 30
+            ef_b_y_max = y_f_int + 30
+            best_ef_rate = -1.0
+            best_ef_a_y = y_e_int
+            best_ef_b_y = y_f_int
+
+            ef_a_y_coarse = list(range(ef_a_y_min, ef_a_y_max + 1, 8))
+            if ef_a_y_coarse and ef_a_y_coarse[-1] != ef_a_y_max:
+                ef_a_y_coarse.append(ef_a_y_max)
+            ef_b_y_coarse = list(range(ef_b_y_min, ef_b_y_max + 1, 8))
+            if ef_b_y_coarse and ef_b_y_coarse[-1] != ef_b_y_max:
+                ef_b_y_coarse.append(ef_b_y_max)
+            for ef_a_y in ef_a_y_coarse:
+                for ef_b_y in ef_b_y_coarse:
+                    rate = _line_segment_white_rate(x_e_int, ef_a_y, x_f_int, ef_b_y, half_width=5)
+                    if rate > best_ef_rate:
+                        best_ef_rate = rate
+                        best_ef_a_y = ef_a_y
+                        best_ef_b_y = ef_b_y
+            ref_a_min = max(ef_a_y_min, best_ef_a_y - 2)
+            ref_a_max = min(ef_a_y_max, best_ef_a_y + 2)
+            ref_b_min = max(ef_b_y_min, best_ef_b_y - 2)
+            ref_b_max = min(ef_b_y_max, best_ef_b_y + 2)
+            for ef_a_y in range(ref_a_min, ref_a_max + 1):
+                for ef_b_y in range(ref_b_min, ref_b_max + 1):
+                    rate = _line_segment_white_rate(x_e_int, ef_a_y, x_f_int, ef_b_y, half_width=5)
+                    if rate > best_ef_rate:
+                        best_ef_rate = rate
+                        best_ef_a_y = ef_a_y
+                        best_ef_b_y = ef_b_y
+            return (x_e_int, best_ef_a_y), (x_f_int, best_ef_b_y)
+
+        ef_left = _best_ef_line(0, 5)
+        ef_right = _best_ef_line(24, 29)
+
+        def _best_green_segment(idx_a: int, idx_b: int) -> tuple[tuple[int, int], tuple[int, int], float] | None:
+            if idx_a >= len(all_proj_list) or idx_b >= len(all_proj_list):
+                return None
+            x_a, y_a = float(all_proj_list[idx_a][0]), float(all_proj_list[idx_a][1])
+            x_b, y_b = float(all_proj_list[idx_b][0]), float(all_proj_list[idx_b][1])
+            x_a_int, y_a_int = int(round(x_a)), int(round(y_a))
+            x_b_int, y_b_int = int(round(x_b)), int(round(y_b))
+            if abs(x_b_int - x_a_int) < 1 and abs(y_b_int - y_a_int) < 1:
+                return None
+
+            a_y_min = y_a_int - 30
+            a_y_max = y_a_int + 30
+            b_y_min = y_b_int - 30
+            b_y_max = y_b_int + 30
+            best_rate = -1.0
+            best_a_y = y_a_int
+            best_b_y = y_b_int
+
+            a_y_coarse = list(range(a_y_min, a_y_max + 1, 8))
+            if a_y_coarse and a_y_coarse[-1] != a_y_max:
+                a_y_coarse.append(a_y_max)
+            b_y_coarse = list(range(b_y_min, b_y_max + 1, 8))
+            if b_y_coarse and b_y_coarse[-1] != b_y_max:
+                b_y_coarse.append(b_y_max)
+            for ay in a_y_coarse:
+                for by in b_y_coarse:
+                    rate = _line_segment_white_rate(x_a_int, ay, x_b_int, by, half_width=5)
+                    if rate > best_rate:
+                        best_rate = rate
+                        best_a_y = ay
+                        best_b_y = by
+
+            ref_a_min = max(a_y_min, best_a_y - 2)
+            ref_a_max = min(a_y_max, best_a_y + 2)
+            ref_b_min = max(b_y_min, best_b_y - 2)
+            ref_b_max = min(b_y_max, best_b_y + 2)
+            for ay in range(ref_a_min, ref_a_max + 1):
+                for by in range(ref_b_min, ref_b_max + 1):
+                    rate = _line_segment_white_rate(x_a_int, ay, x_b_int, by, half_width=5)
+                    if rate > best_rate:
+                        best_rate = rate
+                        best_a_y = ay
+                        best_b_y = by
+            return (x_a_int, best_a_y), (x_b_int, best_b_y), float(best_rate)
+
+        seg_13_16 = _best_green_segment(13, 16)
+
+        # Search: E.y in [Ey-200, Ey+200], F.y in [Fy-200, Fy+200]. Coarse-to-fine + early exit to reduce time.
+        a_min = int(np.floor(Ey - 200.0))
+        a_max = int(np.ceil(Ey + 200.0))
+        b_min = int(np.floor(Fy - 200.0))
+        b_max = int(np.ceil(Fy + 200.0))
         best_rate = -1.0
         best_aay: int | None = None
         best_bby: int | None = None
-        STEP_COARSE_41 = 4
+        STEP_COARSE_41 = 20
         REFINE_RADIUS_41 = 4
         STEP_FINE_41 = 2
-        GREEN_RATE_EARLY_EXIT_41 = 0.95  # stop search if rate >= this
-        done = False
         # Phase 1: coarse grid (step 4)
         for aay in range(a_min, a_max + 1, STEP_COARSE_41):
-            if done:
-                break
             for bby in range(b_min, b_max + 1, STEP_COARSE_41):
                 rate = _border_line_white_rate(float(aay), float(bby))
                 if rate > best_rate:
                     best_rate = rate
                     best_aay = aay
                     best_bby = bby
-                    if best_rate >= GREEN_RATE_EARLY_EXIT_41:
-                        done = True
-                        break
         # Phase 2: refine around best coarse (step 2 in ±REFINE_RADIUS_41)
-        if best_aay is not None and best_bby is not None and not done:
+        if best_aay is not None and best_bby is not None:
             a_ref_min = max(a_min, best_aay - REFINE_RADIUS_41)
             a_ref_max = min(a_max, best_aay + REFINE_RADIUS_41)
             b_ref_min = max(b_min, best_bby - REFINE_RADIUS_41)
             b_ref_max = min(b_max, best_bby + REFINE_RADIUS_41)
             for aay in range(a_ref_min, a_ref_max + 1, STEP_FINE_41):
-                if done:
-                    break
                 for bby in range(b_ref_min, b_ref_max + 1, STEP_FINE_41):
                     rate = _border_line_white_rate(float(aay), float(bby))
                     if rate > best_rate:
                         best_rate = rate
                         best_aay = aay
                         best_bby = bby
-                        if best_rate >= GREEN_RATE_EARLY_EXIT_41:
-                            done = True
-                            break
 
         # Fallback: if search had no candidates (empty range), use red-line E/F (no cap to image)
         if best_aay is None or best_bby is None:
@@ -1153,11 +1299,20 @@ def _step4_1_compute_border_line(
             if DEBUG_FLAG and edge_only is not None and edge_only_dilated is not None:
                 cv2.line(edge_only, pA, pB, (0, 255, 0), green_thickness)
                 cv2.line(edge_only_dilated, pA, pB, (0, 255, 0), green_thickness)
+                if seg_13_16 is not None:
+                    (sax, say), (sbx, sby), _seg_rate = seg_13_16
+                    cv2.line(edge_only, (int(sax), int(say)), (int(sbx), int(sby)), (0, 255, 0), 2)
+                    cv2.line(edge_only_dilated, (int(sax), int(say)), (int(sbx), int(sby)), (0, 255, 0), 2)
             result["best_aay"] = best_aay
             result["best_bby"] = best_bby
             result["best_white_rate"] = best_rate
+            if seg_13_16 is not None:
+                (sax, say), (sbx, sby), seg_rate = seg_13_16
+                result["seg_13_16_a"] = [float(sax), float(say)]
+                result["seg_13_16_b"] = [float(sbx), float(sby)]
+                result.setdefault("profile", {})["seg_13_16_best_white_rate"] = float(seg_rate)
 
-            # kkp[5] = green line ∩ line(H(kp[0]), H(kp[4])); kkp[29] = green line ∩ line(H(kp[24]), H(kp[28])); kp from template projected by H
+            # kkp[5]/kkp[29] from border-green ∩ EF-green (left/right); EF computed here and reused by Step 4.3.
             def _line_line_intersection_41(
                 ax: float, ay: float, bx: float, by: float,
                 cx: float, cy: float, dx: float, dy: float,
@@ -1176,38 +1331,90 @@ def _step4_1_compute_border_line(
             green_bx, green_by = float(W_img - 1), float(best_bby)
 
             t_kkp = time.perf_counter()
-            # Get kp[0], kp[4], kp[24], kp[28] by projecting template keypoints using H (from input keypoints)
-            src_0_4_24_28 = np.array(
-                [
-                    [FOOTBALL_KEYPOINTS_CORRECTED[0]],
-                    [FOOTBALL_KEYPOINTS_CORRECTED[4]],
-                    [FOOTBALL_KEYPOINTS_CORRECTED[24]],
-                    [FOOTBALL_KEYPOINTS_CORRECTED[28]],
-                ],
-                dtype=np.float32,
-            )
-            proj_0_4_24_28 = cv2.perspectiveTransform(src_0_4_24_28, H_mat).reshape(-1, 2)
-            cx0, cy0 = float(proj_0_4_24_28[0][0]), float(proj_0_4_24_28[0][1])
-            cx4, cy4 = float(proj_0_4_24_28[1][0]), float(proj_0_4_24_28[1][1])
-            cx24, cy24 = float(proj_0_4_24_28[2][0]), float(proj_0_4_24_28[2][1])
-            cx28, cy28 = float(proj_0_4_24_28[3][0]), float(proj_0_4_24_28[3][1])
+            # Reuse EF lines computed earlier (and used to constrain border-green scoring).
+            def _project_point_to_line(
+                px: float, py: float,
+                ax: float, ay: float,
+                bx: float, by: float,
+            ) -> tuple[float, float] | None:
+                vx, vy = (bx - ax), (by - ay)
+                vv = vx * vx + vy * vy
+                if vv < 1e-12:
+                    return None
+                t = ((px - ax) * vx + (py - ay) * vy) / vv
+                return (ax + t * vx, ay + t * vy)
 
-            # kkp[5] = infinitely extended green line ∩ line(H(kp[0]), H(kp[4]))
-            if abs(cx4 - cx0) >= 1e-9 or abs(cy4 - cy0) >= 1e-9:
+            # middle-vertical line based kkp[13..16]
+            if seg_13_16 is not None:
+                (sax, say), (sbx, sby), _ = seg_13_16
+                saxf, sayf, sbxf, sbyf = float(sax), float(say), float(sbx), float(sby)
+
+                # kkp16 = middle-vertical line ∩ border-green line
+                pt16 = _line_line_intersection_41(
+                    green_ax, green_ay, green_bx, green_by,
+                    saxf, sayf, sbxf, sbyf,
+                )
+                if pt16 is not None:
+                    result["kkp16"] = [float(pt16[0]), float(pt16[1])]
+
+                # kkp13/14/15 = orthogonal projection from kp13/14/15 onto infinite middle-vertical line.
+                for idx in (13, 14, 15):
+                    src_pt: tuple[float, float] | None = None
+                    if idx < len(ordered_kps):
+                        kp = ordered_kps[idx]
+                        if kp and len(kp) >= 2:
+                            xk, yk = float(kp[0]), float(kp[1])
+                            if not (abs(xk) < 1e-6 and abs(yk) < 1e-6):
+                                src_pt = (xk, yk)
+                    if src_pt is None and idx < len(all_proj_list):
+                        src_pt = (float(all_proj_list[idx][0]), float(all_proj_list[idx][1]))
+                    if src_pt is None:
+                        continue
+                    proj_pt = _project_point_to_line(
+                        float(src_pt[0]), float(src_pt[1]),
+                        saxf, sayf, sbxf, sbyf,
+                    )
+                    if proj_pt is None:
+                        continue
+                    result[f"kkp{idx}"] = [float(proj_pt[0]), float(proj_pt[1])]
+
+            if ef_left is not None:
+                (lax, lay), (lbx, lby) = ef_left
+                result["ef_left_a"] = [float(lax), float(lay)]
+                result["ef_left_b"] = [float(lbx), float(lby)]
                 pt = _line_line_intersection_41(
                     green_ax, green_ay, green_bx, green_by,
-                    cx0, cy0, cx4, cy4,
+                    float(lax), float(lay), float(lbx), float(lby),
                 )
                 if pt is not None:
                     result["kkp5"] = [float(pt[0]), float(pt[1])]
-            # kkp[29] = infinitely extended green line ∩ line(H(kp[24]), H(kp[28]))
-            if abs(cx28 - cx24) >= 1e-9 or abs(cy28 - cy24) >= 1e-9:
+                if DEBUG_FLAG and edge_only is not None and edge_only_dilated is not None:
+                    cv2.line(edge_only, (int(lax), int(lay)), (int(lbx), int(lby)), (0, 255, 0), 2)
+                    cv2.line(edge_only_dilated, (int(lax), int(lay)), (int(lbx), int(lby)), (0, 255, 0), 2)
+
+            if ef_right is not None:
+                (rax, ray), (rbx, rby) = ef_right
+                result["ef_right_a"] = [float(rax), float(ray)]
+                result["ef_right_b"] = [float(rbx), float(rby)]
                 pt = _line_line_intersection_41(
                     green_ax, green_ay, green_bx, green_by,
-                    cx24, cy24, cx28, cy28,
+                    float(rax), float(ray), float(rbx), float(rby),
                 )
                 if pt is not None:
                     result["kkp29"] = [float(pt[0]), float(pt[1])]
+                if DEBUG_FLAG and edge_only is not None and edge_only_dilated is not None:
+                    cv2.line(edge_only, (int(rax), int(ray)), (int(rbx), int(rby)), (0, 255, 0), 2)
+                    cv2.line(edge_only_dilated, (int(rax), int(ray)), (int(rbx), int(rby)), (0, 255, 0), 2)
+
+            if DEBUG_FLAG and edge_only is not None and edge_only_dilated is not None:
+                for idx in (13, 14, 15, 16):
+                    kk = result.get(f"kkp{idx}")
+                    if kk and len(kk) >= 2:
+                        ix, iy = int(round(float(kk[0]))), int(round(float(kk[1])))
+                        if 0 <= ix < W_img and 0 <= iy < H_img:
+                            cv2.circle(edge_only, (ix, iy), 4, (0, 255, 0), -1)
+                            cv2.circle(edge_only_dilated, (ix, iy), 4, (0, 255, 0), -1)
+
             result["profile"]["kkp_intersect_ms"] = (time.perf_counter() - t_kkp) * 1000.0
 
         result["profile"]["total_ms"] = (time.perf_counter() - t_start) * 1000.0
@@ -1217,6 +1424,11 @@ def _step4_1_compute_border_line(
                 f"[DEBUG] Step 4.1 frame {frame_number}: has_h={result['has_h']} p5={result['p5']} p29={result['p29']} "
                 f"Ey={result.get('Ey')} Fy={result.get('Fy')} best_aay={result.get('best_aay')} best_bby={result.get('best_bby')} "
                 f"best_white_rate={result.get('best_white_rate')} kkp5={result.get('kkp5')} kkp29={result.get('kkp29')} "
+                f"kkp13={result.get('kkp13')} kkp14={result.get('kkp14')} "
+                f"kkp15={result.get('kkp15')} kkp16={result.get('kkp16')} "
+                f"ef_left=({result.get('ef_left_a')},{result.get('ef_left_b')}) "
+                f"ef_right=({result.get('ef_right_a')},{result.get('ef_right_b')}) "
+                f"seg13_16=({result.get('seg_13_16_a')},{result.get('seg_13_16_b')}) "
                 f"profile: total_ms={(prof.get('total_ms') or 0):.2f} edges_dilate_ms={(prof.get('edges_dilate_ms') or 0):.2f} "
                 f"homography_red_ms={(prof.get('homography_red_ms') or 0):.2f} green_search_ms={(prof.get('green_search_ms') or 0):.2f} "
                 f"kkp_intersect_ms={(prof.get('kkp_intersect_ms') or 0):.2f}"
@@ -1250,7 +1462,8 @@ def _step4_9_select_h_and_keypoints(
 ) -> tuple[list[list[float]] | None, float]:
     """
     Step 4.9: H1 is taken from Step 4.1 when available (same input kps), else computed from input kps.
-    H2 (input + step4_3 kkps weight 4), H3 (input + step4_1 & step4_3 kkps weight 8 and 4).
+    H2 (input + step4_3 kkps weight 4), H3 (input + step4_1 & step4_3 kkps weight 8 and 4),
+    H4 (input + step4_1 kkps weight 4, only when Step 4.1 is enabled).
     Score each H with evaluate_keypoints_for_frame; pick best H. If all fail or max score 0.0, fallback (return None, 0.0).
     For best H, re-project template keypoints and return (keypoints, score). Keypoints: in-bounds only; others [0,0].
     """
@@ -1326,6 +1539,167 @@ def _step4_9_select_h_and_keypoints(
         except Exception:
             return 0.0
 
+    def _score_h_with_reason(H: np.ndarray | None) -> tuple[float, str | None]:
+        if H is None:
+            return 0.0, None
+        try:
+            tpl_pts = np.array([[float(p[0]), float(p[1])] for p in template], dtype=np.float32).reshape(-1, 1, 2)
+            proj = cv2.perspectiveTransform(tpl_pts, H).reshape(-1, 2)
+            frame_kps_tuples = [(float(proj[i][0]), float(proj[i][1])) for i in range(len(proj))]
+            template_image = challenge_template()
+            score = float(
+                evaluate_keypoints_for_frame(
+                    template_keypoints=template,
+                    frame_keypoints=frame_kps_tuples,
+                    frame=frame,
+                    floor_markings_template=template_image,
+                    frame_number=frame_number,
+                    cached_edges=cached_edges,
+                )
+            )
+            if score > 0.0:
+                return score, None
+            # Detect precise mask failure reason for rescue eligibility.
+            try:
+                warped = project_image_using_keypoints(
+                    image=template_image,
+                    source_keypoints=template,
+                    destination_keypoints=frame_kps_tuples,
+                    destination_width=W_img,
+                    destination_height=H_img,
+                )
+                _ = extract_masks_for_ground_and_lines(warped, debug_frame_id=frame_number)
+            except InvalidMask as e:
+                return score, str(e)
+            except Exception:
+                pass
+            return score, None
+        except Exception:
+            return 0.0, None
+
+    def _homography_from_variant(label: str, kps_variant: list[list[float]]) -> np.ndarray | None:
+        if label == "H1":
+            return _homography_from_kps(kps_variant)
+        if label == "H2":
+            src2, dst2 = _build_weighted_correspondences(
+                kps_variant,
+                weight_43=h2_weight_43,
+                weight_41=1,
+                use_right=use_right,
+            )
+            if len(src2) >= 4:
+                H2_try, _ = cv2.findHomography(np.array(src2, dtype=np.float32), np.array(dst2, dtype=np.float32))
+                return H2_try
+            return None
+        if label == "H3":
+            src3, dst3 = _build_weighted_correspondences(
+                kps_variant,
+                weight_43=h3_weight_43,
+                weight_41=h3_weight_41,
+                use_right=use_right,
+            )
+            if len(src3) >= 4:
+                H3_try, _ = cv2.findHomography(np.array(src3, dtype=np.float32), np.array(dst3, dtype=np.float32))
+                return H3_try
+            return None
+        if label == "H4":
+            src4, dst4 = _build_weighted_correspondences(
+                kps_variant,
+                weight_43=1,
+                weight_41=h4_weight_41,
+                use_right=use_right,
+            )
+            if len(src4) >= 4:
+                H4_try, _ = cv2.findHomography(np.array(src4, dtype=np.float32), np.array(dst4, dtype=np.float32))
+                return H4_try
+            return None
+        return None
+
+    def _retry_wide_line_for_variant(
+        label: str,
+        H_init: np.ndarray | None,
+        kps_variant: list[list[float]],
+    ) -> tuple[float, np.ndarray | None]:
+        def _save_retry_debug_image(tag: str, H_val: np.ndarray | None, kps_draw: list[list[float]]) -> None:
+            if not DEBUG_FLAG or H_val is None:
+                return
+            try:
+                if cached_edges is not None:
+                    edges = cached_edges
+                else:
+                    edges = compute_frame_canny_edges(frame)
+                try:
+                    dil_k = _kernel_rect_3()
+                except Exception:
+                    dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                edges_dilated = cv2.dilate(edges, dil_k, iterations=3)
+                edge_dilated_bgr = np.zeros((H_img, W_img, 3), dtype=np.uint8)
+                edge_dilated_bgr[edges_dilated > 0] = (255, 255, 255)
+                template_image = challenge_template()
+                img = edge_dilated_bgr.copy()
+                if template_image is not None and template_image.size > 0:
+                    warped = cv2.warpPerspective(template_image, H_val, (W_img, H_img))
+                    img = cv2.addWeighted(img, 0.55, warped, 0.45, 0)
+                for kp in kps_draw:
+                    if not kp or len(kp) < 2:
+                        continue
+                    x, y = float(kp[0]), float(kp[1])
+                    if abs(x) < 1e-6 and abs(y) < 1e-6:
+                        continue
+                    ix, iy = int(round(x)), int(round(y))
+                    if 0 <= ix < W_img and 0 <= iy < H_img:
+                        cv2.circle(img, (ix, iy), 5, (0, 0, 255), -1)
+                out_dir = Path("debug_frames") / "x"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                safe_tag = str(tag).replace("+", "p").replace("-", "m")
+                out_path = out_dir / f"frame_{int(frame_number):05d}_step4_9_{label}_retry_{safe_tag}.png"
+                cv2.imwrite(str(out_path), img)
+                _save_ordered_step_image(4, f"step4_9_{label}_retry_{safe_tag}", img, frame_number)
+            except Exception:
+                pass
+
+        score_init, reason_init = _score_h_with_reason(H_init)
+        if not (score_init <= 0.0 and reason_init and "A projected line is too wide" in reason_init):
+            return score_init, H_init
+
+        valid_indices = [
+            i
+            for i in range(min(len(kps_variant), n_tpl))
+            if (
+                kps_variant[i]
+                and len(kps_variant[i]) >= 2
+                and not (abs(float(kps_variant[i][0])) < 1e-6 and abs(float(kps_variant[i][1])) < 1e-6)
+                and 0 <= float(kps_variant[i][0]) < W_img
+                and 0 <= float(kps_variant[i][1]) < H_img
+            )
+        ]
+        if not valid_indices:
+            return score_init, H_init
+
+        smallest_y_idx = min(valid_indices, key=lambda i: (float(kps_variant[i][1]), float(kps_variant[i][0]), int(i)))
+        base_x = float(kps_variant[smallest_y_idx][0])
+        base_y = float(kps_variant[smallest_y_idx][1])
+
+        for dx, dy, tag in [(0.0, -1.0, "y-1"), (0.0, 1.0, "y+1"), (1.0, 0.0, "x+1"), (-1.0, 0.0, "x-1")]:
+            nx, ny = base_x + dx, base_y + dy
+            if not (0.0 <= nx < W_img and 0.0 <= ny < H_img):
+                continue
+            kps_try = [list(kp) if kp else [0.0, 0.0] for kp in kps_variant]
+            kps_try[smallest_y_idx] = [nx, ny]
+            H_try = _homography_from_variant(label, kps_try)
+            if H_try is None:
+                continue
+            _save_retry_debug_image(tag, H_try, kps_try)
+            score_try, reason_try = _score_h_with_reason(H_try)
+            if DEBUG_FLAG:
+                print(
+                    f"[DEBUG] Frame {frame_number} - Step 4.9 {label} rescue: try {tag} on kp[{smallest_y_idx}] "
+                    f"-> score={score_try:.6f}, reason={reason_try or 'ok'}"
+                )
+            if score_try > 0.0:
+                return score_try, H_try
+        return score_init, H_init
+
     def _project_and_valid_only(H: np.ndarray) -> list[list[float]]:
         tpl_pts = np.array([[float(p[0]), float(p[1])] for p in template], dtype=np.float32).reshape(-1, 1, 2)
         proj = cv2.perspectiveTransform(tpl_pts, H).reshape(-1, 2)
@@ -1342,12 +1716,14 @@ def _step4_9_select_h_and_keypoints(
     h2_weight_43 = 4 if STEP4_3_ENABLED else 1
     h3_weight_43 = 4 if STEP4_3_ENABLED else 1
     h3_weight_41 = 8 if STEP4_1_ENABLED else 1
+    h4_weight_41 = 4 if STEP4_1_ENABLED else 1
 
     if DEBUG_FLAG:
         print(
             f"[DEBUG] Frame {frame_number} - Step 4.9: building H1 (input kps), "
             f"H2 (input + step4_3 kkps weight {h2_weight_43}), "
-            f"H3 (input + step4_1 & step4_3 kkps weight {h3_weight_41} & {h3_weight_43})"
+            f"H3 (input + step4_1 & step4_3 kkps weight {h3_weight_41} & {h3_weight_43}), "
+            f"H4 (input + step4_1 kkps weight {h4_weight_41})"
         )
 
     # kps1 = input (for H1)
@@ -1376,6 +1752,14 @@ def _step4_9_select_h_and_keypoints(
             kps3[5] = list(step4_1["kkp5"])
         if step4_1.get("kkp29") is not None:
             kps3[29] = list(step4_1["kkp29"])
+
+    # kps4 = input overwritten by step4_1 kkps only
+    kps4 = [list(kp) if kp else [0.0, 0.0] for kp in kps1]
+    if step4_1:
+        if step4_1.get("kkp5") is not None:
+            kps4[5] = list(step4_1["kkp5"])
+        if step4_1.get("kkp29") is not None:
+            kps4[29] = list(step4_1["kkp29"])
 
     # H1: reuse H from Step 4.1 when available (same input kps), else compute from kps1
     H1 = None
@@ -1410,10 +1794,22 @@ def _step4_9_select_h_and_keypoints(
         if len(src3) >= 4:
             H3, _ = cv2.findHomography(np.array(src3, dtype=np.float32), np.array(dst3, dtype=np.float32))
 
+    # H4 is only meaningful when Step 4.1 is enabled (step4_1-weighted variant only).
+    H4 = None
+    if STEP4_1_ENABLED:
+        src4, dst4 = _build_weighted_correspondences(
+            kps4,
+            weight_43=1,
+            weight_41=h4_weight_41,
+            use_right=use_right,
+        )
+        if len(src4) >= 4:
+            H4, _ = cv2.findHomography(np.array(src4, dtype=np.float32), np.array(dst4, dtype=np.float32))
+
     if DEBUG_FLAG:
         print(
             f"[DEBUG] Frame {frame_number} - Step 4.9: H1 valid={H1 is not None}, "
-            f"H2 valid={H2 is not None}, H3 valid={H3 is not None}"
+            f"H2 valid={H2 is not None}, H3 valid={H3 is not None}, H4 valid={H4 is not None}"
         )
         # Input keypoints (Step 4) with (x,y) coordinates
         input_kp_strs = []
@@ -1450,29 +1846,28 @@ def _step4_9_select_h_and_keypoints(
                     kkp43_strs.append(f"kkp20=({float(a):.2f},{float(b):.2f})")
         print(f"[DEBUG] Frame {frame_number} - Step 4.9: kkps from 4.3: {', '.join(kkp43_strs) if kkp43_strs else 'none'}")
 
-    if TV_AF_EVAL_PARALLEL and not DEBUG_FLAG:
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            f1 = ex.submit(_score_h, H1)
-            f2 = ex.submit(_score_h, H2)
-            f3 = ex.submit(_score_h, H3)
-            s1, s2, s3 = f1.result(), f2.result(), f3.result()
-    else:
-        s1 = _score_h(H1)
-        s2 = _score_h(H2)
-        s3 = _score_h(H3)
-    best_score = max(s1, s2, s3)
+    s1, H1 = _retry_wide_line_for_variant("H1", H1, kps1)
+    s2, H2 = _retry_wide_line_for_variant("H2", H2, kps2)
+    s3, H3 = _retry_wide_line_for_variant("H3", H3, kps3)
+    s4, H4 = _retry_wide_line_for_variant("H4", H4, kps4)
+    best_score = max(s1, s2, s3, s4)
 
     if DEBUG_FLAG:
         print(
-            f"[DEBUG] Frame {frame_number} - Step 4.9: scores H1={s1:.6f}, H2={s2:.6f}, H3={s3:.6f}"
+            f"[DEBUG] Frame {frame_number} - Step 4.9: scores H1={s1:.6f}, H2={s2:.6f}, H3={s3:.6f}, H4={s4:.6f}"
         )
-        if best_score <= 0.0 or (H1 is None and H2 is None and H3 is None):
+        if best_score <= 0.0 or (H1 is None and H2 is None and H3 is None and H4 is None):
             print(
                 f"[DEBUG] Frame {frame_number} - Step 4.9: fallback (best_score={best_score:.6f}, "
                 "no valid H or all scores 0)"
             )
         else:
-            which = "H1" if (best_score == s1 and H1 is not None) else "H2" if (best_score == s2 and H2 is not None) else "H3"
+            which = (
+                "H1" if (best_score == s1 and H1 is not None) else
+                "H2" if (best_score == s2 and H2 is not None) else
+                "H3" if (best_score == s3 and H3 is not None) else
+                "H4"
+            )
             print(f"[DEBUG] Frame {frame_number} - Step 4.9: best={which} score={best_score:.6f}")
 
         # H images: dilate base + H-warped template overlay + 5px red dots for that H's keypoints (drawn on top)
@@ -1493,7 +1888,7 @@ def _step4_9_select_h_and_keypoints(
                 out_dir = Path("debug_frames") / "x"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 opacity = 0.45
-                for label, H_val, kps in [("H1", H1, kps1), ("H2", H2, kps2), ("H3", H3, kps3)]:
+                for label, H_val, kps in [("H1", H1, kps1), ("H2", H2, kps2), ("H3", H3, kps3), ("H4", H4, kps4)]:
                     if H_val is None:
                         if DEBUG_FLAG:
                             print(f"[DEBUG] Frame {frame_number} - Step 4.9: skip {label} image (H is None)")
@@ -1564,7 +1959,7 @@ def _step4_9_select_h_and_keypoints(
                         )
                     return out_kps_try, float(score_try)
         return None, 0.0
-    if H1 is None and H2 is None and H3 is None:
+    if H1 is None and H2 is None and H3 is None and H4 is None:
         return None, 0.0
 
     best_H: np.ndarray | None = None
@@ -1578,12 +1973,20 @@ def _step4_9_select_h_and_keypoints(
     elif best_score == s3 and H3 is not None:
         best_H = H3
         best_label = "H3"
+    elif best_score == s4 and H4 is not None:
+        best_H = H4
+        best_label = "H4"
     if best_H is None:
         return None, 0.0
     out_kps = _project_and_valid_only(best_H)
     # If fill-missing is disabled, do not add keypoints that were not in the winning input set
     if not STEP6_FILL_MISSING_ENABLED:
-        winning_kps = kps1 if best_label == "H1" else (kps2 if best_label == "H2" else kps3)
+        winning_kps = (
+            kps1 if best_label == "H1" else
+            kps2 if best_label == "H2" else
+            kps3 if best_label == "H3" else
+            kps4
+        )
         for i in range(min(len(out_kps), len(winning_kps))):
             w = winning_kps[i]
             if not w or len(w) < 2 or (abs(float(w[0])) < 1e-6 and abs(float(w[1])) < 1e-6):
@@ -1651,11 +2054,13 @@ def _step4_3_debug_dilate_and_lines(
     ordered_kps: list[list[float]],
     frame_number: int,
     decision: str | None = None,
+    step4_1: dict[str, Any] | None = None,
     cached_edges: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """
     Step 4.3: Find best lines AB and CD (10px white rate); output kkp[4], kkp[12] (left) or kkp[28], kkp[20] (right).
     Left: kkp[4] = AB ∩ line(kp[0], kp[3]), kkp[12] = AB ∩ CD. Right: kkp[28] = AB ∩ line(kp[24], kp[27]), kkp[20] = AB ∩ CD.
+    EF line is reused from Step 4.1 when available; otherwise Step 4.3 searches EF locally.
     Output: dilated image with red and green lines only. Hand over kkp to Step 4.9.
     """
     result: dict[str, Any] = {
@@ -1960,8 +2365,8 @@ def _step4_3_debug_dilate_and_lines(
         cx, cy = float(best_c[0]), float(best_c[1])
         dx, dy = float(best_d[0]), float(best_d[1])
 
-        # kkp4 (left) / kkp28 (right): best green line EF between H(kp[0]) and H(kp[5]) [left] or H(kp[24]) and H(kp[29]) [right]; then kkp = EF ∩ AB.
-        # Draw red line E–F (H-projected); find best green line EF (10px white rate); kkp = EF ∩ AB.
+        # kkp4 (left) / kkp28 (right): use EF line from Step 4.1 when present; otherwise search EF locally.
+        # Then kkp = EF ∩ AB.
         idx_E = 0 if not use_right else 24
         idx_F = 5 if not use_right else 29
         if idx_E < len(all_proj_list) and idx_F < len(all_proj_list):
@@ -1977,43 +2382,63 @@ def _step4_3_debug_dilate_and_lines(
             t_ = time.perf_counter()
             x_E_int, y_E_int = int(round(x_E)), int(round(y_E))
             x_F_int, y_F_int = int(round(x_F)), int(round(y_F))
-            ef_a_y_min = y_E_int - 30
-            ef_a_y_max = y_E_int + 30
-            ef_b_y_min = y_F_int - 30
-            ef_b_y_max = y_F_int + 30
             best_ef_rate = -1.0
-            best_ef_a_y = y_E_int
-            best_ef_b_y = y_F_int
-            if abs(x_F_int - x_E_int) >= 1 or abs(y_F_int - y_E_int) >= 1:
-                ef_a_y_coarse = list(range(ef_a_y_min, ef_a_y_max + 1, STEP_COARSE))
-                if ef_a_y_coarse and ef_a_y_coarse[-1] != ef_a_y_max:
-                    ef_a_y_coarse.append(ef_a_y_max)
-                ef_b_y_coarse = list(range(ef_b_y_min, ef_b_y_max + 1, STEP_COARSE))
-                if ef_b_y_coarse and ef_b_y_coarse[-1] != ef_b_y_max:
-                    ef_b_y_coarse.append(ef_b_y_max)
-                for ef_a_y in ef_a_y_coarse:
-                    for ef_b_y in ef_b_y_coarse:
-                        rate = _line_segment_white_rate(x_E_int, ef_a_y, x_F_int, ef_b_y, half_width=half_width)
-                        if rate > best_ef_rate:
-                            best_ef_rate = rate
-                            best_ef_a_y = ef_a_y
-                            best_ef_b_y = ef_b_y
-                ef_ref_min_a = max(ef_a_y_min, best_ef_a_y - REFINE_RADIUS)
-                ef_ref_max_a = min(ef_a_y_max, best_ef_a_y + REFINE_RADIUS)
-                ef_ref_min_b = max(ef_b_y_min, best_ef_b_y - REFINE_RADIUS)
-                ef_ref_max_b = min(ef_b_y_max, best_ef_b_y + REFINE_RADIUS)
-                for ef_a_y in range(ef_ref_min_a, ef_ref_max_a + 1):
-                    for ef_b_y in range(ef_ref_min_b, ef_ref_max_b + 1):
-                        rate = _line_segment_white_rate(x_E_int, ef_a_y, x_F_int, ef_b_y, half_width=half_width)
-                        if rate > best_ef_rate:
-                            best_ef_rate = rate
-                            best_ef_a_y = ef_a_y
-                            best_ef_b_y = ef_b_y
-            best_ef_a = (x_E_int, best_ef_a_y)
-            best_ef_b = (x_F_int, best_ef_b_y)
+            ef_reused = False
+            best_ef_a = (x_E_int, y_E_int)
+            best_ef_b = (x_F_int, y_F_int)
+            ef_key_a = "ef_right_a" if use_right else "ef_left_a"
+            ef_key_b = "ef_right_b" if use_right else "ef_left_b"
+            if step4_1 and step4_1.get(ef_key_a) is not None and step4_1.get(ef_key_b) is not None:
+                try:
+                    ea = step4_1[ef_key_a]
+                    eb = step4_1[ef_key_b]
+                    if ea and eb and len(ea) >= 2 and len(eb) >= 2:
+                        best_ef_a = (int(round(float(ea[0]))), int(round(float(ea[1]))))
+                        best_ef_b = (int(round(float(eb[0]))), int(round(float(eb[1]))))
+                        ef_reused = True
+                except Exception:
+                    ef_reused = False
+
+            if not ef_reused:
+                ef_a_y_min = y_E_int - 30
+                ef_a_y_max = y_E_int + 30
+                ef_b_y_min = y_F_int - 30
+                ef_b_y_max = y_F_int + 30
+                best_ef_a_y = y_E_int
+                best_ef_b_y = y_F_int
+                if abs(x_F_int - x_E_int) >= 1 or abs(y_F_int - y_E_int) >= 1:
+                    ef_a_y_coarse = list(range(ef_a_y_min, ef_a_y_max + 1, STEP_COARSE))
+                    if ef_a_y_coarse and ef_a_y_coarse[-1] != ef_a_y_max:
+                        ef_a_y_coarse.append(ef_a_y_max)
+                    ef_b_y_coarse = list(range(ef_b_y_min, ef_b_y_max + 1, STEP_COARSE))
+                    if ef_b_y_coarse and ef_b_y_coarse[-1] != ef_b_y_max:
+                        ef_b_y_coarse.append(ef_b_y_max)
+                    for ef_a_y in ef_a_y_coarse:
+                        for ef_b_y in ef_b_y_coarse:
+                            rate = _line_segment_white_rate(x_E_int, ef_a_y, x_F_int, ef_b_y, half_width=half_width)
+                            if rate > best_ef_rate:
+                                best_ef_rate = rate
+                                best_ef_a_y = ef_a_y
+                                best_ef_b_y = ef_b_y
+                    ef_ref_min_a = max(ef_a_y_min, best_ef_a_y - REFINE_RADIUS)
+                    ef_ref_max_a = min(ef_a_y_max, best_ef_a_y + REFINE_RADIUS)
+                    ef_ref_min_b = max(ef_b_y_min, best_ef_b_y - REFINE_RADIUS)
+                    ef_ref_max_b = min(ef_b_y_max, best_ef_b_y + REFINE_RADIUS)
+                    for ef_a_y in range(ef_ref_min_a, ef_ref_max_a + 1):
+                        for ef_b_y in range(ef_ref_min_b, ef_ref_max_b + 1):
+                            rate = _line_segment_white_rate(x_E_int, ef_a_y, x_F_int, ef_b_y, half_width=half_width)
+                            if rate > best_ef_rate:
+                                best_ef_rate = rate
+                                best_ef_a_y = ef_a_y
+                                best_ef_b_y = ef_b_y
+                best_ef_a = (x_E_int, best_ef_a_y)
+                best_ef_b = (x_F_int, best_ef_b_y)
             result["profile"]["EF_search_ms"] = (time.perf_counter() - t_) * 1000.0
             result["profile"]["EF_best_white_rate"] = best_ef_rate
+            result["profile"]["EF_reused_from_step4_1"] = 1.0 if ef_reused else 0.0
             if best_ef_rate >= 0.0 and DEBUG_FLAG and edge_dilated_bgr is not None:
+                cv2.line(edge_dilated_bgr, best_ef_a, best_ef_b, (0, 255, 0), 2)
+            elif ef_reused and DEBUG_FLAG and edge_dilated_bgr is not None:
                 cv2.line(edge_dilated_bgr, best_ef_a, best_ef_b, (0, 255, 0), 2)
             ef_ax, ef_ay = float(best_ef_a[0]), float(best_ef_a[1])
             ef_bx, ef_by = float(best_ef_b[0]), float(best_ef_b[1])
@@ -4319,6 +4744,7 @@ def _step3_build_ordered_candidates(
                 if all(q is not None and q >= 0 for q in quad4):
                     use_cy_connlabel = max(quad4) < len(frame_adj_mask)
             if use_cy_connlabel:
+                candidates_before_cy_connlabel = list(candidates)
                 quad_arr = np.asarray(quad4, dtype=np.int32)
                 if cand_arr is None:
                     cand_arr = _cand_arr_from_candidates(candidates)
@@ -4341,6 +4767,18 @@ def _step3_build_ordered_candidates(
                 candidates = [candidates[i] for i in keep_idx]
                 if cand_arr is not None:
                     cand_arr = cand_arr[keep_idx]
+                if len(candidates) == 0 and len(candidates_before_cy_connlabel) > 0:
+                    py_filtered = [
+                        cand
+                        for cand in candidates_before_cy_connlabel
+                        if _check_connection_label_constraints(
+                            list(cand) if isinstance(cand, tuple) else cand,
+                            quad,
+                        )
+                    ]
+                    if py_filtered:
+                        candidates = py_filtered
+                        cand_arr = None
             else:
                 candidates = [cand for cand in candidates if _check_connection_label_constraints(cand, quad)]
                 cand_arr = None
@@ -4471,6 +4909,7 @@ def _step4_pick_best_candidate(
     decision: str | None,
     template_pts: np.ndarray,
     frame_number: int,
+    frame: np.ndarray | None = None,
 ) -> tuple[float, dict[str, Any] | None, list[int] | None]:
     """
     Step 4: pick best candidate per frame via homography distance (avg_distance).
@@ -4658,9 +5097,9 @@ def _step4_pick_best_candidate(
                         f"{match_best_avg:.2f} >= {STEP4_GOOD_CANDIDATE_THRESHOLD}, will try match 2"
                     )
 
-    if best_meta and best_avg > 60:
+    if best_meta and best_avg > 80:
         if DEBUG_FLAG:
-            print(f"[DEBUG] Frame {frame_number} - Rejecting all candidates: min avg_distance {best_avg:.2f} > 60")
+            print(f"[DEBUG] Frame {frame_number} - Rejecting all candidates: min avg_distance {best_avg:.2f} > 80")
         best_meta = None
 
     if DEBUG_FLAG and best_meta:
@@ -4668,6 +5107,57 @@ def _step4_pick_best_candidate(
             f"[DEBUG] Frame {frame_number} - Selected candidate {best_meta['candidate_idx']}: {best_meta['candidate']} "
             f"with avg_distance: {best_meta['avg_distance']:.2f}"
         )
+        if frame is not None:
+            try:
+                match_idx = int(best_meta.get("match_idx", -1))
+                cand = list(best_meta.get("candidate") or [])
+                if 0 <= match_idx < len(matches) and len(cand) >= 4:
+                    best_match = matches[match_idx] or {}
+                    four_points = list(best_match.get("four_points") or [])
+                    if len(four_points) >= 4:
+                        dst_pts_list: list[tuple[float, float]] = []
+                        for kp_idx in four_points[:4]:
+                            if kp_idx is None or kp_idx < 0 or kp_idx >= len(frame_keypoints):
+                                dst_pts_list = []
+                                break
+                            kp = frame_keypoints[kp_idx]
+                            if not kp or len(kp) < 2:
+                                dst_pts_list = []
+                                break
+                            dst_pts_list.append((float(kp[0]), float(kp[1])))
+                        if len(dst_pts_list) == 4:
+                            src_pts = _FOOTBALL_KEYPOINTS_NP[
+                                np.asarray(cand[:4], dtype=np.int32)
+                            ].reshape(1, 4, 2)
+                            dst_pts = np.asarray(dst_pts_list, dtype=np.float32).reshape(1, 4, 2)
+                            H_best, _ = cv2.findHomography(src_pts, dst_pts, method=cv2.RANSAC)
+                            if _is_valid_homography(H_best):
+                                projected_all = cv2.perspectiveTransform(template_pts, H_best).reshape(-1, 2)
+                                proj_vis = frame.copy()
+                                font = cv2.FONT_HERSHEY_SIMPLEX
+                                for slot_idx, pxy in enumerate(projected_all):
+                                    px, py = float(pxy[0]), float(pxy[1])
+                                    ix, iy = int(round(px)), int(round(py))
+                                    if 0 <= ix < proj_vis.shape[1] and 0 <= iy < proj_vis.shape[0]:
+                                        cv2.circle(proj_vis, (ix, iy), 4, (0, 0, 255), -1)
+                                        cv2.putText(
+                                            proj_vis,
+                                            f"{slot_idx}:P",
+                                            (ix + 6, iy - 5),
+                                            font,
+                                            0.55,
+                                            (0, 0, 255),
+                                            2,
+                                        )
+                                _save_ordered_step_image(
+                                    4,
+                                    "step4_projected_32_from_selected_H",
+                                    proj_vis,
+                                    int(frame_number),
+                                )
+            except Exception as e:
+                if DEBUG_FLAG:
+                    print(f"[DEBUG] Frame {frame_number} - Failed to save non-similarity projected-32 debug image: {e}")
 
     return best_avg, best_meta, best_orig_idx_map
 
@@ -4709,7 +5199,7 @@ def _dedupe_close_unordered_keypoints(
     kps: list[list[float]] | list[Any],
     labels: list[int] | None,
     frame_number: int,
-    proximity_px: float = 5.0,
+    proximity_px: float = 20.0,
 ) -> tuple[list[list[float]], list[int], list[dict[str, Any]]]:
     """
     Before Step 1, invalidate close unordered keypoints:
@@ -4828,140 +5318,130 @@ def _try_process_similar_frame_fast_path(
     prev_valid_original_index: list[int] | None,
     prev_best_meta: dict[str, Any] | None,
     prev_valid_frame_id: int | None,
+    similarity_snapshot_history: dict[int, dict[str, Any]] | None,
     log_fn: Any,
     push_fn: Any,
 ) -> tuple[bool, dict[str, Any]]:
     """
-    Similar-frame fast path: if current frame keypoints are close to the immediately
-    previous valid (non-fallback) frame, reuse the previous ordered slots by label+nearest.
+    Similar-frame fast path: if current frame keypoints are close to one of the recent
+    previous frames (N-1, N-2, N-3), reuse that frame's ordered slots by label+nearest.
 
     Returns (handled, state_updates). If handled=True, caller should apply state_updates
     to prev_* variables and continue the main loop.
     """
     H, W = frame.shape[:2]
 
-    # Similarity check inputs (only allow immediate previous frame)
+    # Similarity check inputs (try recent references in order: N-1, N-2, N-3)
     similar_frame = False
+    similar_ref_frame_id: int | None = None
     matches: list[tuple[int, int, float]] = []
     common_matches: list[tuple[int, int, float]] = []
     labeled_ref: list[dict[str, Any]] | None = None
-    best_meta_prev = prev_best_meta
-
-    if prev_valid_frame_id is not None and prev_valid_frame_id != fn - 1:
-        best_meta_prev = None
-        if DEBUG_FLAG:
-            print(
-                f"[DEBUG] Frame {fn} - Skipping similarity check: prev_valid_frame_id ({prev_valid_frame_id}) "
-                f"is not immediately previous frame ({fn - 1})"
-            )
+    best_meta_prev: dict[str, Any] | None = None
 
     if not PREV_RELATIVE_FLAG:
-        best_meta_prev = None
         if DEBUG_FLAG:
             print(f"[DEBUG] Frame {fn} - Skipping similarity check: PREV_RELATIVE_FLAG is disabled")
-
-    # Convert previous frame's ordered keypoints to labeled format for similarity checking
-    if best_meta_prev is not None:
-        prev_ordered_kps = best_meta_prev.get("reordered_keypoints")
-        if prev_ordered_kps and isinstance(prev_ordered_kps, list):
-            labeled_ref = _ordered_keypoints_to_labeled(prev_ordered_kps, template_len)
-            if DEBUG_FLAG and labeled_ref:
-                print(
-                    f"[DEBUG] Frame {fn} - Similarity check: Converted {len(labeled_ref)} valid keypoints "
-                    f"from previous frame {prev_valid_frame_id} ordered keypoints"
-                )
-
-    # NOTE: Similarity reuse uses ordered keypoints from previous frame, not original keypoints.
-    if labeled_ref is not None and best_meta_prev is not None:
-        if DEBUG_FLAG:
-            print(f"[DEBUG] Frame {fn} - Similarity check: Comparing with previous frame {prev_valid_frame_id}")
-        _avg_dist, _match_count, matches = _avg_distance_same_label(labeled_cur, labeled_ref)
-        valid_cur = [
-            idx_lab
-            for idx_lab, item in enumerate(labeled_cur)
-            if item.get("x") is not None and item.get("y") is not None and item.get("label") is not None
-        ]
-        common_matches = [
-            (cur_idx, prev_idx, dist) for cur_idx, prev_idx, dist in matches if dist != float("inf")
-        ]
+    else:
+        ref_candidates: list[tuple[int, dict[str, Any]]] = []
+        seen_ref_ids: set[int] = set()
+        for delta in (1, 2, 3):
+            ref_id = int(fn - delta)
+            if ref_id < 0 or ref_id in seen_ref_ids:
+                continue
+            ref_meta: dict[str, Any] | None = None
+            if prev_valid_frame_id == ref_id and prev_best_meta is not None:
+                ref_meta = prev_best_meta
+            elif similarity_snapshot_history is not None:
+                ref_meta = similarity_snapshot_history.get(ref_id)
+            if ref_meta is not None:
+                ref_candidates.append((ref_id, ref_meta))
+                seen_ref_ids.add(ref_id)
 
         if DEBUG_FLAG:
-            max_dist = max((dist for _, _, dist in common_matches), default=0.0) if common_matches else 0.0
-            print(
-                f"[DEBUG] Frame {fn} - Similarity check: valid_cur={len(valid_cur) if valid_cur else 0}, "
-                f"common_matches={len(common_matches)}, max_dist={max_dist:.2f}, "
-                f"prev_best_meta={'exists' if best_meta_prev else 'None'}"
-            )
-            if common_matches:
-                print(f"[DEBUG] Frame {fn} - Matching keypoints (total: {len(common_matches)}):")
-                for cur_idx, prev_idx, dist in sorted(common_matches, key=lambda x: x[2], reverse=True):
-                    cur_item = labeled_cur[cur_idx] if 0 <= cur_idx < len(labeled_cur) else None
-                    prev_item = labeled_ref[prev_idx] if 0 <= prev_idx < len(labeled_ref) else None
-                    cur_id = cur_item.get("id") if cur_item else "?"
-                    cur_label = cur_item.get("label") if cur_item else "?"
-                    cur_x = cur_item.get("x") if cur_item else "?"
-                    cur_y = cur_item.get("y") if cur_item else "?"
-                    prev_id = prev_item.get("id") if prev_item else "?"
-                    prev_x = prev_item.get("x") if prev_item else "?"
-                    prev_y = prev_item.get("y") if prev_item else "?"
-                    status = "OK" if dist < 30.0 else "LARGE"
+            ref_ids = [rid for rid, _ in ref_candidates]
+            print(f"[DEBUG] Frame {fn} - Similarity check references to try: {ref_ids if ref_ids else 'none'}")
+
+        for ref_id, ref_meta in ref_candidates:
+            prev_ordered_kps = ref_meta.get("reordered_keypoints")
+            if not (prev_ordered_kps and isinstance(prev_ordered_kps, list)):
+                if DEBUG_FLAG:
                     print(
-                        f"  [DEBUG]   [{status}] ID {cur_id} (label {cur_label}): cur[{cur_idx}] at "
-                        f"({cur_x:.1f}, {cur_y:.1f}) -> prev[{prev_idx}] (ID {prev_id}) at "
-                        f"({prev_x:.1f}, {prev_y:.1f}), dist={dist:.2f}px"
+                        f"[DEBUG] Frame {fn} - Similarity check SKIP ref frame {ref_id}: "
+                        f"invalid reordered_keypoints"
                     )
+                continue
 
-        if len(common_matches) >= 3 and all(dist < 40.0 for _, _, dist in common_matches):
-            similar_frame = True
+            labeled_ref_try = _ordered_keypoints_to_labeled(prev_ordered_kps, template_len)
+            if not labeled_ref_try:
+                if DEBUG_FLAG:
+                    print(
+                        f"[DEBUG] Frame {fn} - Similarity check SKIP ref frame {ref_id}: "
+                        f"no valid ordered keypoints"
+                    )
+                continue
+
             if DEBUG_FLAG:
-                print(f"[DEBUG] Frame {fn} - Similarity check PASSED, reusing previous frame order")
-                print(f"[DEBUG] Frame {fn} - Similarity check criteria:")
-                print(f"[DEBUG]   - common_matches ({len(common_matches)}) >= 3: ✓")
-                print(f"[DEBUG]   - all distances < 40.0px: ✓")
-                print(f"[DEBUG]   - prev_best_meta exists: {'✓' if best_meta_prev is not None else '✗'}")
-        elif DEBUG_FLAG:
-            reasons = []
-            if len(common_matches) < 3:
-                reasons.append(f"common_matches ({len(common_matches)}) < 3")
-            elif not all(dist < 40.0 for _, _, dist in common_matches):
-                max_dist = max((dist for _, _, dist in common_matches), default=0.0)
-                reasons.append(f"max_dist ({max_dist:.2f}) >= 40.0")
-            print(f"[DEBUG] Frame {fn} - Similarity check FAILED: {', '.join(reasons) if reasons else 'unknown'}")
-            print(f"[DEBUG] Frame {fn} - Similarity check criteria:")
-            print(f"[DEBUG]   - common_matches ({len(common_matches)}) >= 3: {'✓' if len(common_matches) >= 3 else '✗'}")
-            if common_matches:
-                max_dist_check = max((dist for _, _, dist in common_matches), default=0.0)
                 print(
-                    f"[DEBUG]   - all distances < 40.0px (max={max_dist_check:.2f}): "
-                    f"{'✓' if all(dist < 40.0 for _, _, dist in common_matches) else '✗'}"
+                    f"[DEBUG] Frame {fn} - Similarity check: Comparing with reference frame {ref_id} "
+                    f"(converted {len(labeled_ref_try)} valid keypoints)"
                 )
-            print(f"[DEBUG]   - prev_best_meta exists: {'✓' if best_meta_prev is not None else '✗'}")
-            prev_quality_dbg = best_meta_prev.get("avg_distance")
-            quality_name = "avg_distance"
-            print(f"[DEBUG]   - prev_{quality_name} exists: {'✓' if prev_quality_dbg is not None else '✗'}")
-            if prev_quality_dbg is not None:
+
+            _avg_dist, _match_count, matches_try = _avg_distance_same_label(labeled_cur, labeled_ref_try)
+            valid_cur = [
+                idx_lab
+                for idx_lab, item in enumerate(labeled_cur)
+                if item.get("x") is not None and item.get("y") is not None and item.get("label") is not None
+            ]
+            common_try = [
+                (cur_idx, prev_idx, dist) for cur_idx, prev_idx, dist in matches_try if dist != float("inf")
+            ]
+
+            if DEBUG_FLAG:
+                max_dist = max((dist for _, _, dist in common_try), default=0.0) if common_try else 0.0
                 print(
-                    f"[DEBUG]   - prev_{quality_name} ({float(prev_quality_dbg):.2f}) < 30.0: "
-                    f"{'✓' if float(prev_quality_dbg) < 30.0 else '✗'}"
+                    f"[DEBUG] Frame {fn} - Similarity check (ref {ref_id}): "
+                    f"valid_cur={len(valid_cur) if valid_cur else 0}, "
+                    f"common_matches={len(common_try)}, max_dist={max_dist:.2f}"
                 )
-    elif DEBUG_FLAG:
-        if best_meta_prev is None:
+
+            if len(common_try) >= 3 and all(dist < 40.0 for _, _, dist in common_try):
+                similar_frame = True
+                similar_ref_frame_id = int(ref_id)
+                best_meta_prev = ref_meta
+                labeled_ref = labeled_ref_try
+                matches = matches_try
+                common_matches = common_try
+                if DEBUG_FLAG:
+                    print(
+                        f"[DEBUG] Frame {fn} - Similarity check PASSED with ref frame {ref_id}, "
+                        f"reusing order"
+                    )
+                break
+
+            if DEBUG_FLAG:
+                reasons = []
+                if len(common_try) < 3:
+                    reasons.append(f"common_matches ({len(common_try)}) < 3")
+                elif not all(dist < 40.0 for _, _, dist in common_try):
+                    max_dist = max((dist for _, _, dist in common_try), default=0.0)
+                    reasons.append(f"max_dist ({max_dist:.2f}) >= 40.0")
+                print(
+                    f"[DEBUG] Frame {fn} - Similarity check FAILED with ref frame {ref_id}: "
+                    f"{', '.join(reasons) if reasons else 'unknown'}"
+                )
+        if DEBUG_FLAG and not similar_frame and not ref_candidates:
             print(
-                f"\n[DEBUG] Frame {fn} - Similarity check SKIPPED: No previous best_meta "
-                f"(prev_valid_frame_id={prev_valid_frame_id})"
-            )
-        elif labeled_ref is None:
-            print(
-                f"\n[DEBUG] Frame {fn} - Similarity check SKIPPED: No valid ordered keypoints in previous frame "
-                f"(prev_valid_frame_id={prev_valid_frame_id})"
+                f"\n[DEBUG] Frame {fn} - Similarity check SKIPPED: No previous references "
+                f"(need N-1/N-2/N-3 snapshots)"
             )
 
     if not similar_frame:
         return False, {}
 
     if DEBUG_FLAG:
-        print(f"[DEBUG] Frame {fn} - Reusing order from previous frame {prev_valid_frame_id}")
-    log_fn(f"{progress_prefix} - similar to prev, reusing order")
+        print(f"[DEBUG] Frame {fn} - Reusing order from reference frame {similar_ref_frame_id}")
+    log_fn(f"{progress_prefix} - similar to frame {similar_ref_frame_id}, reusing order")
 
     ordered_kps = [[0.0, 0.0] for _ in range(template_len)]
     orig_idx_map_current = [-1 for _ in range(template_len)]
@@ -5033,6 +5513,7 @@ def _try_process_similar_frame_fast_path(
         used_slots = set()
         matched_slot_motion: list[tuple[int, float, float, float, float]] = []
         estimated_candidate_slots: list[int] = []
+        estimated_candidate_coords: dict[int, list[float]] = {}
         unmatched_candidate_slots: list[int] = []
         unmatched_kept_count = 0
         slot_debug_source: dict[int, str] = {}
@@ -5154,22 +5635,24 @@ def _try_process_similar_frame_fast_path(
                 prev_missing = prev_ordered_keypoints[missing_slot]
                 px_m = float(prev_missing[0])
                 py_m = float(prev_missing[1])
-                mov_x_terms: list[float] = []
-                mov_y_terms: list[float] = []
+                mov_x_num = 0.0
+                mov_y_num = 0.0
+                mov_den = 0.0
 
                 for _, px_c_prev, py_c_prev, px_c_cur, py_c_cur in matched_slot_motion:
-                    dist_x = abs(float(px_c_prev) - px_m)
                     dist_xy = float(np.hypot(px_c_prev - px_m, py_c_prev - py_m))
-                    if dist_x > 1e-6:
-                        mov_x_terms.append((px_c_cur - px_c_prev) / dist_x)
-                    if dist_xy > 1e-6:
-                        mov_y_terms.append((py_c_cur - py_c_prev) / dist_xy)
+                    if dist_xy <= 1e-6:
+                        continue
+                    inv_dist = 1.0 / dist_xy
+                    mov_x_num += ((px_c_cur - px_c_prev) / dist_xy)
+                    mov_y_num += ((py_c_cur - py_c_prev) / dist_xy)
+                    mov_den += inv_dist
 
-                if not mov_x_terms or not mov_y_terms:
+                if mov_den <= 1e-12:
                     continue
 
-                movement_x = float(sum(mov_x_terms) / len(mov_x_terms))
-                movement_y = float(sum(mov_y_terms) / len(mov_y_terms))
+                movement_x = float(mov_x_num / mov_den)
+                movement_y = float(mov_y_num / mov_den)
                 est_x = px_m + movement_x
                 est_y = py_m + movement_y
 
@@ -5177,6 +5660,7 @@ def _try_process_similar_frame_fast_path(
                     ordered_kps[missing_slot] = [est_x, est_y]
                     orig_idx_map_current[missing_slot] = -1
                     estimated_candidate_slots.append(int(missing_slot))
+                    estimated_candidate_coords[int(missing_slot)] = [float(est_x), float(est_y)]
                     slot_debug_source[int(missing_slot)] = "E"
                     if DEBUG_FLAG:
                         print(
@@ -5185,49 +5669,17 @@ def _try_process_similar_frame_fast_path(
                             f"-> ({est_x:.2f}, {est_y:.2f})"
                         )
 
-        # For each estimated additional keypoint, keep it only when it improves
-        # (or keeps) the score compared with removing that keypoint.
-        for slot in estimated_candidate_slots:
-                if slot < 0 or slot >= len(ordered_kps):
-                    continue
-                kp_slot = ordered_kps[slot]
-                if not kp_slot or len(kp_slot) < 2 or (abs(kp_slot[0]) < 1e-6 and abs(kp_slot[1]) < 1e-6):
-                    continue
-
-                with_kp = [list(pt) if pt and len(pt) >= 2 else [0.0, 0.0] for pt in ordered_kps]
-                without_kp = [list(pt) if pt and len(pt) >= 2 else [0.0, 0.0] for pt in ordered_kps]
-                without_kp[slot] = [0.0, 0.0]
-
-                score_with = _score_for_ordered(with_kp)
-                score_without = _score_for_ordered(without_kp)
-
-                if score_with >= score_without:
-                    estimated_missing_count += 1
-                    slot_debug_source[int(slot)] = "E"
-                    if DEBUG_FLAG:
-                        print(
-                            f"[DEBUG] Frame {fn} - Similarity reuse: KEEP estimated slot[{slot}] "
-                            f"(score_with={score_with:.6f} >= score_without={score_without:.6f})"
-                        )
-                else:
-                    ordered_kps[slot] = [0.0, 0.0]
-                    orig_idx_map_current[slot] = -1
-                    slot_debug_source.pop(int(slot), None)
-                    if DEBUG_FLAG:
-                        print(
-                            f"[DEBUG] Frame {fn} - Similarity reuse: REMOVE estimated slot[{slot}] "
-                            f"(score_with={score_with:.6f} < score_without={score_without:.6f})"
-                        )
-
         # For unmatched current keypoints, estimate slot index from H built on
-        # currently accepted points (M + kept E), then evaluate with/without by score.
+        # currently available similarity supports (M + estimated E), then evaluate
+        # with/without by score.
         matched_src: list[tuple[float, float]] = []
         matched_dst: list[tuple[float, float]] = []
+        h_support_slots: list[int] = []
         for slot in range(template_len):
             if not _is_valid_kp(ordered_kps[slot]):
                 continue
             src_tag = slot_debug_source.get(int(slot))
-            if src_tag not in ("M", "E"):
+            if src_tag not in {"M", "E"}:
                 continue
             matched_src.append(
                 (
@@ -5236,6 +5688,7 @@ def _try_process_similar_frame_fast_path(
                 )
             )
             matched_dst.append((float(ordered_kps[slot][0]), float(ordered_kps[slot][1])))
+            h_support_slots.append(int(slot))
 
         H_match = None
         projected_all: np.ndarray | None = None
@@ -5250,6 +5703,18 @@ def _try_process_similar_frame_fast_path(
                     dtype=np.float32,
                 ).reshape(-1, 1, 2)
                 projected_all = cv2.perspectiveTransform(tpl_all, H_match).reshape(-1, 2)
+                if DEBUG_FLAG:
+                    xs = projected_all[:, 0]
+                    ys = projected_all[:, 1]
+                    in_frame = int(
+                        np.sum((xs >= 0.0) & (xs < float(W)) & (ys >= 0.0) & (ys < float(H)))
+                    )
+                    print(
+                        f"[DEBUG] Frame {fn} - Similarity reuse: H-support slots={h_support_slots} "
+                        f"(M/E), projected32 bbox=([{float(np.min(xs)):.2f},{float(np.min(ys)):.2f}]"
+                        f" -> [{float(np.max(xs)):.2f},{float(np.max(ys)):.2f}]), "
+                        f"in_frame={in_frame}/32"
+                    )
 
         unmatched_cur_indices = [
             cur_idx for cur_idx, prev_idx, dist in (matches or [])
@@ -5299,7 +5764,7 @@ def _try_process_similar_frame_fast_path(
                     print(
                         f"[DEBUG] Frame {fn} - Similarity reuse: UNMATCHED cur[{cur_idx}] "
                         f"(orig_id={cur_orig_id}, label={cur_label}) -> nearest same-label projected slot[{best_slot}] "
-                        f"dist={best_dist:.2f}px (H from M+keptE)"
+                        f"dist={best_dist:.2f}px (H from M/E)"
                     )
 
         # Snapshot all M/E/U candidates before unmatched score gating.
@@ -5338,8 +5803,115 @@ def _try_process_similar_frame_fast_path(
                         f"(score_with={score_with:.6f} < score_without={score_without:.6f})"
                     )
 
+        # U checked first; then apply E policy:
+        # - Always keep E for slots 13/14/15/16 without score comparison.
+        # - For remaining E slots, choose the best single candidate by score.
+        if estimated_candidate_slots:
+            # Start from baseline with all E disabled.
+            for slot in estimated_candidate_slots:
+                if 0 <= slot < len(ordered_kps):
+                    ordered_kps[slot] = [0.0, 0.0]
+                    orig_idx_map_current[slot] = -1
+                    slot_debug_source.pop(int(slot), None)
+
+            always_keep_e_slots = {13, 14, 15, 16}
+            estimated_missing_count = 0
+            remaining_candidate_slots: list[int] = []
+            for slot in estimated_candidate_slots:
+                if slot < 0 or slot >= len(ordered_kps):
+                    continue
+                est_coord = estimated_candidate_coords.get(int(slot))
+                if not est_coord or len(est_coord) < 2:
+                    continue
+                if int(slot) in always_keep_e_slots:
+                    ordered_kps[slot] = [float(est_coord[0]), float(est_coord[1])]
+                    orig_idx_map_current[slot] = -1
+                    slot_debug_source[int(slot)] = "E"
+                    estimated_missing_count += 1
+                    if DEBUG_FLAG:
+                        print(
+                            f"[DEBUG] Frame {fn} - Similarity reuse: FORCE-KEEP estimated slot[{slot}] "
+                            f"(always-allow E for slot 13/14/15/16)"
+                        )
+                else:
+                    remaining_candidate_slots.append(int(slot))
+
+            baseline_kps = [list(pt) if pt and len(pt) >= 2 else [0.0, 0.0] for pt in ordered_kps]
+            baseline_score = _score_for_ordered(baseline_kps)
+            best_slot: int | None = None
+            best_score = baseline_score
+
+            for slot in remaining_candidate_slots:
+                if slot < 0 or slot >= len(ordered_kps):
+                    continue
+                est_coord = estimated_candidate_coords.get(int(slot))
+                if not est_coord or len(est_coord) < 2:
+                    continue
+
+                trial_kps = [list(pt) for pt in baseline_kps]
+                trial_kps[slot] = [float(est_coord[0]), float(est_coord[1])]
+                trial_score = _score_for_ordered(trial_kps)
+
+                if DEBUG_FLAG:
+                    print(
+                        f"[DEBUG] Frame {fn} - Similarity reuse: E-candidate slot[{slot}] "
+                        f"(trial_score={trial_score:.6f}, baseline={baseline_score:.6f})"
+                    )
+
+                if trial_score > best_score:
+                    best_score = trial_score
+                    best_slot = int(slot)
+
+            if best_slot is not None:
+                best_coord = estimated_candidate_coords.get(best_slot)
+                if best_coord and len(best_coord) >= 2:
+                    ordered_kps[best_slot] = [float(best_coord[0]), float(best_coord[1])]
+                    orig_idx_map_current[best_slot] = -1
+                    slot_debug_source[int(best_slot)] = "E"
+                    estimated_missing_count += 1
+                    if DEBUG_FLAG:
+                        print(
+                            f"[DEBUG] Frame {fn} - Similarity reuse: KEEP best estimated slot[{best_slot}] "
+                            f"(best_score={best_score:.6f} > baseline={baseline_score:.6f})"
+                        )
+            elif DEBUG_FLAG:
+                print(
+                    f"[DEBUG] Frame {fn} - Similarity reuse: KEEP no estimated slot "
+                    f"(baseline best at {baseline_score:.6f})"
+                )
+
+            if DEBUG_FLAG:
+                # Explicit score triplet-style baseline vs each single-E helps inspect cases like frame 417.
+                _ = _score_for_ordered(
+                    [list(pt) if pt and len(pt) >= 2 else [0.0, 0.0] for pt in ordered_kps]
+                )
+
     if DEBUG_FLAG:
         try:
+            if projected_all is not None:
+                proj_vis = frame.copy()
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                for slot_idx, pxy in enumerate(projected_all):
+                    px, py = float(pxy[0]), float(pxy[1])
+                    ix, iy = int(round(px)), int(round(py))
+                    if 0 <= ix < proj_vis.shape[1] and 0 <= iy < proj_vis.shape[0]:
+                        cv2.circle(proj_vis, (ix, iy), 4, (0, 0, 255), -1)
+                        cv2.putText(
+                            proj_vis,
+                            f"{slot_idx}:P",
+                            (ix + 6, iy - 5),
+                            font,
+                            0.55,
+                            (0, 0, 255),
+                            2,
+                        )
+                _save_ordered_step_image(
+                    4,
+                    "step4_similarity_projected_32_from_matching_H",
+                    proj_vis,
+                    int(fn),
+                )
+
             def _render_similarity_sources(
                 kps_vis: list[list[float]],
                 source_map: dict[int, str],
@@ -5395,6 +5967,12 @@ def _try_process_similar_frame_fast_path(
         ]
         print(f"[DEBUG] Frame {fn} - Similarity reuse: Valid ordered_kps slots: {valid_slots}")
 
+    # Step 4.0 snapshot: similarity-path enrichment result (M/E/U resolved)
+    step4_0_ordered_kps = [
+        [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
+        for pt in ordered_kps
+    ]
+
     step1_entry = {
         "frame_id": int(fn),
         "frame_size": [int(W), int(H)],
@@ -5420,18 +5998,11 @@ def _try_process_similar_frame_fast_path(
         "matches": [],
     }
 
-    push_fn(step1_outputs, step1_entry)
-    push_fn(step2_outputs, step2_entry)
-    push_fn(step3_outputs, step3_entry)
-
     # Use previous frame's decision (left/right) so Step 4.3 and Step 4.9 use the correct side
     prev_decision = best_meta_prev.get("decision") if best_meta_prev else None
     similarity_snapshot = {
         "frame_id": int(fn),
-        "reordered_keypoints": [
-            [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
-            for pt in ordered_kps
-        ],
+        "reordered_keypoints": step4_0_ordered_kps,
         "decision": prev_decision,
     }
     best_meta: dict[str, Any] = {
@@ -5441,11 +6012,11 @@ def _try_process_similar_frame_fast_path(
         "candidate": [],
         "avg_distance": 0.0,
         "reordered_keypoints": ordered_kps,
+        "step4_0_reordered_keypoints": step4_0_ordered_kps,
         "decision": prev_decision,
         "similar_prev_frame": True,
         "added_four_point": False,
     }
-    best_entries.append(best_meta)
 
     found = None
     for fr in ordered_frames:
@@ -5461,10 +6032,6 @@ def _try_process_similar_frame_fast_path(
         if DEBUG_FLAG:
             print(f"[DEBUG] Frame {fn} not found in original JSON, skipping")
         return True, {}
-
-    found["keypoints"] = ordered_kps
-    found.pop("original_index", None)
-    found["added_four_point"] = False
 
     # Step 6 removed.
     fallback_used = False
@@ -5497,6 +6064,7 @@ def _try_process_similar_frame_fast_path(
             ordered_kps=best_meta["reordered_keypoints"],
             frame_number=int(fn),
             decision=best_meta.get("decision"),
+            step4_1=best_meta.get("step4_1"),
             cached_edges=cached_edges,
         )
     else:
@@ -5544,34 +6112,16 @@ def _try_process_similar_frame_fast_path(
                 print(f"[DEBUG] Frame {fn} - Similar frame path: scorer-style fallback failed: {e}")
             best_meta["score"] = 0.0
 
-    # Step 5: validation + fallback (uses keypoints from Step 4.3 when available)
-    validation_passed = False
-    validation_error = None
-    if STEP5_ENABLED and not best_meta.get("added_four_point"):
-        if DEBUG_FLAG:
-            valid_slots_pre_step5 = [
-                (i, [float(pt[0]), float(pt[1])])
-                for i, pt in enumerate(ordered_kps)
-                if pt and len(pt) >= 2 and not (abs(pt[0]) < 1e-6 and abs(pt[1]) < 1e-6)
-            ]
-            print(f"[DEBUG] Frame {fn} - Step 5 (similar frame path): Valid ordered_kps slots BEFORE validation: {valid_slots_pre_step5}")
-        validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(
-            ordered_kps=ordered_kps,
-            frame=frame,
-            template_image=template_image,
-            template_keypoints=FOOTBALL_KEYPOINTS,
-            frame_number=int(fn),
-            best_meta=best_meta,
-            debug_label="similar frame path",
-            cached_edges=cached_edges,
-        )
+    # Step 5 removed: pass Step 4.9 result directly to Step 6.
+    step4_9_passed = step4_9_kps is not None
+    best_meta["validation_passed"] = step4_9_passed
+    if not step4_9_passed:
+        best_meta["validation_error"] = "Step 4.9 did not produce keypoints"
+    else:
+        best_meta.pop("validation_error", None)
 
-    best_meta["validation_passed"] = validation_passed
-    if validation_error:
-        best_meta["validation_error"] = validation_error
-
-    # Step 6: Fill missing keypoints using homography (only if Step 5 passed)
-    if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and validation_passed and not fallback_used and best_meta.get("added_four_point") != True:
+    # Step 6: Fill missing keypoints using homography from Step 4.9 result.
+    if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and step4_9_passed and not fallback_used and best_meta.get("added_four_point") != True:
         ordered_kps = _step6_fill_keypoints_from_homography(
             ordered_kps=ordered_kps,
             frame=frame,
@@ -5579,29 +6129,26 @@ def _try_process_similar_frame_fast_path(
         )
         best_meta["reordered_keypoints"] = ordered_kps
 
-    if not validation_passed:
+    similarity_score = float(best_meta.get("score") or 0.0)
+    if similarity_score <= 0.0:
         if DEBUG_FLAG:
-            error_msg = validation_error or "Unknown validation error"
-            print(f"[DEBUG] Frame {fn} - Step 5: Validation failed ({error_msg}), keeping Step 5 result (no fallback)")
-        best_meta["reordered_keypoints"] = ordered_kps
-        best_meta["fallback"] = False
-        best_meta["added_four_point"] = False
-        fallback_used = False
-        if not validation_error:
-            validation_error = "Validation failed"
-            best_meta["validation_error"] = validation_error
+            print(
+                f"[DEBUG] Frame {fn} - Similarity path score is 0.0; "
+                f"fallback to non-similar self logic for this frame"
+            )
+        log_fn(f"{progress_prefix} - similar score 0.0, retrying with self logic")
+        return False, {}
 
     found["keypoints"] = ordered_kps
     found.pop("original_index", None)
     found["added_four_point"] = best_meta.get("added_four_point", False)
 
-    if best_meta.get("added_four_point") != True:
-        push_fn(step5_outputs, best_meta.copy())
-    else:
-        best_meta_copy = best_meta.copy()
-        best_meta_copy["validation_passed"] = False
-        best_meta_copy["validation_error"] = validation_error or "Added four points (fallback)"
-        push_fn(step5_outputs, best_meta_copy)
+    push_fn(step1_outputs, step1_entry)
+    push_fn(step2_outputs, step2_entry)
+    push_fn(step3_outputs, step3_entry)
+    best_entries.append(best_meta)
+
+    push_fn(step5_outputs, best_meta.copy())
 
     state_updates: dict[str, Any] = {}
     state_updates["prev_labeled"] = labeled_cur
@@ -5617,7 +6164,7 @@ def _try_process_similar_frame_fast_path(
 
 def _step7_interpolate_problematic_frames(
     *,
-    step5_outputs: list[dict[str, Any]] | None,
+    step4_9_outputs: list[dict[str, Any]] | None,
     ordered_frames: list[dict[str, Any]],
     template_len: int,
     out_step7: Path,
@@ -5627,23 +6174,23 @@ def _step7_interpolate_problematic_frames(
 
     This is intentionally a near-verbatim extraction from main() to preserve behavior:
     - only runs when STEP7_ENABLED is True
-    - uses step5_outputs as the source of reordered_keypoints/score
+    - uses Step 4.9 outputs (best_entries) as the source of reordered_keypoints/score
     - optionally writes args.out_step7 only when DEBUG_FLAG is True
     - updates ordered_frames in-place with interpolated keypoints
     """
     if not STEP7_ENABLED:
         return
-    if step5_outputs is None:
+    if step4_9_outputs is None:
         return
-    if len(step5_outputs) == 0:
+    if len(step4_9_outputs) == 0:
         return
 
     if DEBUG_FLAG:
-        print(f"Step 7: Processing {len(step5_outputs)} entries from step 5 for interpolation")
+        print(f"Step 7: Processing {len(step4_9_outputs)} entries from step 4.9 for interpolation")
 
-    # Re-serialize step5_outputs for step 7 processing (same rounding logic as Step 5 output writing)
-    step5_outputs_serializable_for_step7: list[dict[str, Any]] = []
-    for entry in step5_outputs:
+    # Re-serialize Step 4.9 outputs for Step 7 processing
+    step4_9_outputs_serializable_for_step7: list[dict[str, Any]] = []
+    for entry in step4_9_outputs:
         entry_copy = entry.copy()
         avg_dist = entry_copy.get("avg_distance")
         if avg_dist is not None and (avg_dist == float("inf") or np.isinf(avg_dist)):
@@ -5653,9 +6200,9 @@ def _step7_interpolate_problematic_frames(
         score = entry_copy.get("score")
         if score is not None and isinstance(score, (int, float)):
             entry_copy["score"] = round(float(score), 2)
-        step5_outputs_serializable_for_step7.append(entry_copy)
+        step4_9_outputs_serializable_for_step7.append(entry_copy)
 
-    if not step5_outputs_serializable_for_step7:
+    if not step4_9_outputs_serializable_for_step7:
         if DEBUG_FLAG:
             print("Step 7: No frames needed interpolation (no problematic frames found or no valid good frames)")
         return
@@ -5664,26 +6211,25 @@ def _step7_interpolate_problematic_frames(
 
     # Create a map of frame_id -> entry for quick lookup
     frame_map: dict[int, dict[str, Any]] = {}
-    for entry in step5_outputs_serializable_for_step7:
+    for entry in step4_9_outputs_serializable_for_step7:
         frame_id = entry.get("frame_id")
         if frame_id is not None:
             frame_map[int(frame_id)] = entry
 
     sorted_frame_ids = sorted(frame_map.keys())
 
-    # Find problematic frames (score < 0.7)
+    # Find problematic frames (score < 0.3)
     problematic_frames: list[int] = []
     for frame_id in sorted_frame_ids:
         entry = frame_map[frame_id]
         score = entry.get("score")
-        added_four_point = entry.get("added_four_point", False)
-        if (score is not None and score < 0.7) or added_four_point:
+        if score is not None and score < 0.3:
             problematic_frames.append(frame_id)
 
     if DEBUG_FLAG:
         print(
             f"Step 7: Found {len(problematic_frames)} problematic frames "
-            f"(score < 0.7)"
+            f"(score < 0.3)"
         )
 
     # Track frames that have already been rewritten to avoid duplicate processing
@@ -5697,34 +6243,32 @@ def _step7_interpolate_problematic_frames(
         )
 
     for problem_frame_id in problematic_frames:
-        # Find nearest good frame forward (score >= 0.5)
+        # Find nearest good frame forward (score >= 0.3)
         forward_good_frame = None
         for frame_id in sorted_frame_ids:
             if frame_id > problem_frame_id:
                 entry = frame_map[frame_id]
                 score = entry.get("score")
-                added_four_point = entry.get("added_four_point", False)
-                if score is not None and score >= 0.5 and added_four_point == False:
+                if score is not None and score >= 0.3:
                     forward_good_frame = frame_id
                     break
 
-        # Find nearest good frame backward (score >= 0.5)
+        # Find nearest good frame backward (score >= 0.3)
         backward_good_frame = None
         for frame_id in reversed(sorted_frame_ids):
             if frame_id < problem_frame_id:
                 entry = frame_map[frame_id]
                 score = entry.get("score")
-                added_four_point = entry.get("added_four_point", False)
-                if score is not None and score >= 0.5 and added_four_point == False:
+                if score is not None and score >= 0.3:
                     backward_good_frame = frame_id
                     break
 
         if forward_good_frame is None or backward_good_frame is None:
             continue
 
-        # Constraint 1: The length between 2 good frames cannot be over 20 frames
+        # Constraint 1: The length between 2 good frames cannot be over 30 frames
         frame_distance = forward_good_frame - backward_good_frame
-        if frame_distance > 20:
+        if frame_distance > 30:
             continue
 
         forward_entry = frame_map[forward_good_frame]
@@ -5738,32 +6282,6 @@ def _step7_interpolate_problematic_frames(
 
         # Check if both have at least 4 valid keypoints
         if not (forward_valid >= 4 and backward_valid >= 4):
-            continue
-
-        # Constraint 2: There should not be 2 sequential frames without 4 valid keypoints
-        frames_to_check = [fid for fid in sorted_frame_ids if backward_good_frame <= fid <= forward_good_frame]
-
-        consecutive_invalid_count = 0
-        has_invalid_sequence = False
-        for check_fid in frames_to_check:
-            if check_fid in frame_map:
-                check_entry = frame_map[check_fid]
-                check_kps = check_entry.get("reordered_keypoints", [])
-                check_valid = count_valid_keypoints(check_kps)
-                if check_valid < 4:
-                    consecutive_invalid_count += 1
-                    if consecutive_invalid_count >= 2:
-                        has_invalid_sequence = True
-                        break
-                else:
-                    consecutive_invalid_count = 0
-            else:
-                consecutive_invalid_count += 1
-                if consecutive_invalid_count >= 2:
-                    has_invalid_sequence = True
-                    break
-
-        if has_invalid_sequence:
             continue
 
         # Find common valid keypoint indices
@@ -7141,6 +7659,7 @@ def main() -> None:
     prev_valid_original_index: list[int] | None = None
     prev_best_meta: dict[str, Any] | None = None
     prev_valid_frame_id: int | None = None  # Track which frame number was used for prev_valid_labeled
+    similarity_snapshot_history: dict[int, dict[str, Any]] = {}
     step8_edges_cache = (
         OrderedDict()
         if KEYPOINT_H_CONVERT_FLAG and STEP8_EDGE_CACHE_MAX > 0
@@ -7187,7 +7706,7 @@ def main() -> None:
                 kps=kps,
                 labels=labels,
                 frame_number=int(fn),
-                proximity_px=5.0,
+                proximity_px=20.0,
             )
             if DEBUG_FLAG:
                 _save_original_keypoints_debug(frame=frame, keypoints=kps, labels=labels, frame_number=int(fn))
@@ -7217,6 +7736,7 @@ def main() -> None:
                 prev_valid_original_index=prev_valid_original_index,
                 prev_best_meta=prev_best_meta,
                 prev_valid_frame_id=prev_valid_frame_id,
+                similarity_snapshot_history=similarity_snapshot_history,
                 log_fn=_log,
                 push_fn=_push,
             )
@@ -7229,6 +7749,11 @@ def main() -> None:
                     prev_valid_original_index = state_updates.get("prev_valid_original_index")
                     prev_best_meta = state_updates.get("prev_best_meta")
                     prev_valid_frame_id = state_updates.get("prev_valid_frame_id")
+                    if prev_best_meta is not None and prev_valid_frame_id is not None:
+                        similarity_snapshot_history[int(prev_valid_frame_id)] = prev_best_meta
+                        for old_fid in list(similarity_snapshot_history.keys()):
+                            if old_fid < int(fn) - 3:
+                                similarity_snapshot_history.pop(old_fid, None)
                 continue
 
             # Early check: if fewer than 4 valid keypoints, use keypoints padded to template_len (no fallback)
@@ -7261,6 +7786,20 @@ def main() -> None:
                 found["keypoints"] = ordered_kps
                 found["added_four_point"] = False
                 found.pop("original_index", None)
+                # Keep Step 4.9 source complete for Step 7: missing-score frames are scored as 0.0.
+                best_entries.append(
+                    {
+                        "frame_id": int(fn),
+                        "match_idx": None,
+                        "candidate_idx": None,
+                        "candidate": [],
+                        "avg_distance": float("inf"),
+                        "reordered_keypoints": ordered_kps,
+                        "score": 0.0,
+                        "decision": "right" if FORCE_DECISION_RIGHT else None,
+                        "added_four_point": False,
+                    }
+                )
                 parts_ms["other_result"] = 0.0
                 _log(f"{progress_prefix} - done")
                 prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
@@ -7331,20 +7870,23 @@ def main() -> None:
                 decision=decision,
                 template_pts=template_pts,
                 frame_number=int(fn),
+                frame=frame,
             )
             parts_ms["step4"] = (time.perf_counter() - t4) * 1000.0
             similarity_snapshot_for_next: dict[str, Any] | None = None
 
             if best_meta:
                 ordered_kps = best_meta["reordered_keypoints"]
+                step4_0_ordered_kps = [
+                    [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
+                    for pt in ordered_kps
+                ]
                 similarity_snapshot_for_next = {
                     "frame_id": int(fn),
-                    "reordered_keypoints": [
-                        [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
-                        for pt in ordered_kps
-                    ],
+                    "reordered_keypoints": step4_0_ordered_kps,
                     "decision": best_meta.get("decision"),
                 }
+                best_meta["step4_0_reordered_keypoints"] = step4_0_ordered_kps
                 fallback_used = False
 
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
@@ -7384,6 +7926,7 @@ def main() -> None:
                         ordered_kps=best_meta["reordered_keypoints"],
                         frame_number=int(fn),
                         decision=best_meta.get("decision"),
+                        step4_1=best_meta.get("step4_1"),
                         cached_edges=cached_edges,
                     )
                     _merge_step4_3_profile_into_parts(best_meta.get("step4_3"), parts_ms)
@@ -7407,60 +7950,17 @@ def main() -> None:
                     best_meta["score"] = step4_9_score
                     ordered_kps = step4_9_kps
 
-                # Step 5: validate result from Step 4.9 (use score from 4.9; clamp bounds if needed)
-                validation_passed = False
-                validation_error = None
-                if STEP5_ENABLED and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
-                    t5v = time.perf_counter()
-                    validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(
-                        ordered_kps=ordered_kps,
-                        frame=frame,
-                        template_image=template_image,
-                        template_keypoints=FOOTBALL_KEYPOINTS,
-                        frame_number=int(fn),
-                        best_meta=best_meta,
-                        debug_label=None,
-                        cached_edges=cached_edges,
-                    )
-                    parts_ms["step5_validate"] = parts_ms.get("step5_validate", 0.0) + (time.perf_counter() - t5v) * 1000.0
-
-                # Store validation result in best_meta
-                best_meta["validation_passed"] = validation_passed
-                if validation_error:
-                    best_meta["validation_error"] = validation_error
-                
-                # Get Step 5 score
-                step5_score = best_meta.get("score", 0.0)
-                step5_ordered_kps = ordered_kps  # Save Step 5 result
-                has_scoring_error = validation_error and ("A projected line is too wide" in validation_error or "projected line" in validation_error.lower())
-                
-                # If validation failed or score is 0.0 or has scoring error, keep Step 5 result and mark fallback
-                if step5_score == 0.0 or has_scoring_error or not validation_passed:
-                    if DEBUG_FLAG:
-                        if step5_score == 0.0:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Score is 0.0, keeping Step 5 result (no fallback)")
-                        elif has_scoring_error:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Validation error '{validation_error}', keeping Step 5 result (no fallback)")
-                        else:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Validation failed, keeping Step 5 result (no fallback)")
-                    ordered_kps = step5_ordered_kps
-                    best_meta["reordered_keypoints"] = ordered_kps
-                    best_meta["fallback"] = False
-                    best_meta["added_four_point"] = False
-                    fallback_used = False
-                    best_meta["validation_passed"] = False
-                    if not validation_error:
-                        if step5_score == 0.0:
-                            validation_error = "Score is 0.0"
-                        elif has_scoring_error:
-                            validation_error = validation_error or "Scoring error"
-                        else:
-                            validation_error = "Validation failed"
-                    best_meta["validation_error"] = validation_error
+                # Step 5 removed: pass Step 4.9 result directly to Step 6.
+                step4_9_passed = step4_9_kps is not None
+                best_meta["validation_passed"] = step4_9_passed
+                if not step4_9_passed:
+                    best_meta["validation_error"] = "Step 4.9 did not produce keypoints"
                     need_fallback = False
-                
-                # Step 6: Fill missing keypoints using homography (only if Step 5 passed and no fallback)
-                if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and validation_passed and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
+                else:
+                    best_meta.pop("validation_error", None)
+
+                # Step 6: Fill missing keypoints using homography from Step 4.9 result.
+                if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and step4_9_passed and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
                     t6 = time.perf_counter()
                     ordered_kps = _step6_fill_keypoints_from_homography(
                         ordered_kps=ordered_kps,
@@ -7472,13 +7972,7 @@ def main() -> None:
                 
                 best_entries.append(best_meta)
                 # Add to step5_outputs: include validation results
-                if best_meta.get("added_four_point") != True:
-                    _push(step5_outputs, best_meta.copy())
-                elif best_meta.get("added_four_point") == True:
-                    best_meta_copy = best_meta.copy()
-                    best_meta_copy["validation_passed"] = False
-                    best_meta_copy["validation_error"] = validation_error or "Added four points (fallback)"
-                    _push(step5_outputs, best_meta_copy)
+                _push(step5_outputs, best_meta.copy())
             else:
                 if DEBUG_FLAG:
                     print(f"[DEBUG] Frame {fn} - No valid candidate found in Step 4, using orig_kps padded to template_len (no fallback)")
@@ -7500,14 +7994,17 @@ def main() -> None:
                     "decision": decision,
                     "added_four_point": False,
                 }
+                step4_0_ordered_kps = [
+                    [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
+                    for pt in ordered_kps
+                ]
                 similarity_snapshot_for_next = {
                     "frame_id": int(fn),
-                    "reordered_keypoints": [
-                        [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
-                        for pt in ordered_kps
-                    ],
+                    "reordered_keypoints": step4_0_ordered_kps,
                     "decision": decision,
                 }
+                best_meta["step4_0_reordered_keypoints"] = step4_0_ordered_kps
+                best_meta["score"] = float(best_meta.get("score", 0.0) or 0.0)
                 best_entries.append(best_meta)
                 best_meta_copy = best_meta.copy()
                 best_meta_copy["score"] = best_meta.get("score", 0.0)
@@ -7541,6 +8038,11 @@ def main() -> None:
             prev_valid_original_index = orig_idx_map if best_meta.get("match_idx") is not None else None
             prev_best_meta = similarity_snapshot_for_next if similarity_snapshot_for_next is not None else best_meta.copy()
             prev_valid_frame_id = fn
+            if prev_best_meta is not None:
+                similarity_snapshot_history[int(fn)] = prev_best_meta
+                for old_fid in list(similarity_snapshot_history.keys()):
+                    if old_fid < int(fn) - 3:
+                        similarity_snapshot_history.pop(old_fid, None)
 
             _log(f"{progress_prefix} - done")
             parts_ms["other_result"] = (time.perf_counter() - t_other_result) * 1000.0
@@ -7556,7 +8058,7 @@ def main() -> None:
         # Step 7: Interpolate problematic frames (called before Step 8, doesn't need frame_store)
         t7 = time.perf_counter()
         _step7_interpolate_problematic_frames(
-            step5_outputs=step5_outputs,
+            step4_9_outputs=best_entries,
             ordered_frames=ordered_frames,
             template_len=template_len,
             out_step7=args.out_step7,
@@ -7886,6 +8388,7 @@ def convert_payload(
     prev_valid_original_index: list[int] | None = None
     prev_best_meta: dict[str, Any] | None = None
     prev_valid_frame_id: int | None = None  # Track which frame number was used for prev_valid_labeled
+    similarity_snapshot_history: dict[int, dict[str, Any]] = {}
     step8_edges_cache = (
         OrderedDict()
         if KEYPOINT_H_CONVERT_FLAG and STEP8_EDGE_CACHE_MAX > 0
@@ -7928,7 +8431,7 @@ def convert_payload(
                 kps=kps,
                 labels=labels,
                 frame_number=int(fn),
-                proximity_px=5.0,
+                proximity_px=20.0,
             )
             if DEBUG_FLAG:
                 _save_original_keypoints_debug(frame=frame, keypoints=kps, labels=labels, frame_number=int(fn))
@@ -7957,6 +8460,7 @@ def convert_payload(
                 prev_valid_original_index=prev_valid_original_index,
                 prev_best_meta=prev_best_meta,
                 prev_valid_frame_id=prev_valid_frame_id,
+                similarity_snapshot_history=similarity_snapshot_history,
                 log_fn=_log,
                 push_fn=_push,
             )
@@ -7968,6 +8472,11 @@ def convert_payload(
                     prev_valid_original_index = state_updates.get("prev_valid_original_index")
                     prev_best_meta = state_updates.get("prev_best_meta")
                     prev_valid_frame_id = state_updates.get("prev_valid_frame_id")
+                    if prev_best_meta is not None and prev_valid_frame_id is not None:
+                        similarity_snapshot_history[int(prev_valid_frame_id)] = prev_best_meta
+                        for old_fid in list(similarity_snapshot_history.keys()):
+                            if old_fid < int(fn) - 3:
+                                similarity_snapshot_history.pop(old_fid, None)
                 continue
 
             # Early check: if fewer than 4 valid keypoints, use keypoints padded to template_len (no fallback)
@@ -8000,6 +8509,20 @@ def convert_payload(
                 found["keypoints"] = ordered_kps
                 found["added_four_point"] = False
                 found.pop("original_index", None)
+                # Keep Step 4.9 source complete for Step 7: missing-score frames are scored as 0.0.
+                best_entries.append(
+                    {
+                        "frame_id": int(fn),
+                        "match_idx": None,
+                        "candidate_idx": None,
+                        "candidate": [],
+                        "avg_distance": float("inf"),
+                        "reordered_keypoints": ordered_kps,
+                        "score": 0.0,
+                        "decision": "right" if FORCE_DECISION_RIGHT else None,
+                        "added_four_point": False,
+                    }
+                )
                 parts_ms["other_result"] = 0.0
                 _log(f"{progress_prefix} - done")
                 prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
@@ -8070,20 +8593,23 @@ def convert_payload(
                 decision=decision,
                 template_pts=template_pts,
                 frame_number=int(fn),
+                frame=frame,
             )
             parts_ms["step4"] = (time.perf_counter() - t4) * 1000.0
             similarity_snapshot_for_next: dict[str, Any] | None = None
 
             if best_meta:
                 ordered_kps = best_meta["reordered_keypoints"]
+                step4_0_ordered_kps = [
+                    [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
+                    for pt in ordered_kps
+                ]
                 similarity_snapshot_for_next = {
                     "frame_id": int(fn),
-                    "reordered_keypoints": [
-                        [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
-                        for pt in ordered_kps
-                    ],
+                    "reordered_keypoints": step4_0_ordered_kps,
                     "decision": best_meta.get("decision"),
                 }
+                best_meta["step4_0_reordered_keypoints"] = step4_0_ordered_kps
                 fallback_used = False
 
                 need_fallback = _count_valid_keypoints(ordered_kps) < 4
@@ -8119,6 +8645,7 @@ def convert_payload(
                         ordered_kps=best_meta["reordered_keypoints"],
                         frame_number=int(fn),
                         decision=best_meta.get("decision"),
+                        step4_1=best_meta.get("step4_1"),
                         cached_edges=cached_edges,
                     )
                     _merge_step4_3_profile_into_parts(best_meta.get("step4_3"), parts_ms)
@@ -8142,62 +8669,16 @@ def convert_payload(
                     best_meta["score"] = step4_9_score
                     ordered_kps = step4_9_kps
 
-                # Step 5: validate result from Step 4.9 (use score from 4.9; clamp bounds if needed)
-                validation_passed = False
-                validation_error = None
-                if STEP5_ENABLED and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
-                    t5v = time.perf_counter()
-                    validation_passed, validation_error, ordered_kps = _step5_validate_ordered_keypoints(
-                        ordered_kps=ordered_kps,
-                        frame=frame,
-                        template_image=template_image,
-                        template_keypoints=FOOTBALL_KEYPOINTS,
-                        frame_number=int(fn),
-                        best_meta=best_meta,
-                        debug_label=None,
-                        cached_edges=cached_edges,
-                    )
-                    parts_ms["step5_validate"] = parts_ms.get("step5_validate", 0.0) + (time.perf_counter() - t5v) * 1000.0
-
-                best_meta["validation_passed"] = validation_passed
-                if validation_error:
-                    best_meta["validation_error"] = validation_error
-
-                step5_score = best_meta.get("score", 0.0)
-                step5_ordered_kps = ordered_kps
-                has_scoring_error = validation_error and (
-                    "A projected line is too wide" in validation_error
-                    or "projected line" in str(validation_error).lower()
-                )
-
-                # If validation failed or score is 0.0 or has scoring error, keep Step 5 result and mark fallback
-                if step5_score == 0.0 or has_scoring_error or not validation_passed:
-                    if DEBUG_FLAG:
-                        if step5_score == 0.0:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Score is 0.0, keeping Step 5 result (no fallback)")
-                        elif has_scoring_error:
-                            print(
-                                f"[DEBUG] Frame {fn} - Step 5: Validation error '{validation_error}', keeping Step 5 result (no fallback)"
-                            )
-                        else:
-                            print(f"[DEBUG] Frame {fn} - Step 5: Validation failed, keeping Step 5 result (no fallback)")
-                    ordered_kps = step5_ordered_kps
-                    best_meta["reordered_keypoints"] = ordered_kps
-                    best_meta["fallback"] = False
-                    best_meta["added_four_point"] = False
-                    fallback_used = False
-                    best_meta["validation_passed"] = False
-                    if not validation_error:
-                        if step5_score == 0.0:
-                            validation_error = "Score is 0.0"
-                        elif has_scoring_error:
-                            validation_error = validation_error or "Scoring error"
-                        else:
-                            validation_error = "Validation failed"
-                    best_meta["validation_error"] = validation_error
+                # Step 5 removed: pass Step 4.9 result directly to Step 6.
+                step4_9_passed = step4_9_kps is not None
+                best_meta["validation_passed"] = step4_9_passed
+                if not step4_9_passed:
+                    best_meta["validation_error"] = "Step 4.9 did not produce keypoints"
                     need_fallback = False
+                else:
+                    best_meta.pop("validation_error", None)
 
-                if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and validation_passed and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
+                if STEP6_ENABLED and STEP6_FILL_MISSING_ENABLED and step4_9_passed and not need_fallback and not fallback_used and best_meta.get("added_four_point") != True:
                     t6 = time.perf_counter()
                     ordered_kps = _step6_fill_keypoints_from_homography(
                         ordered_kps=ordered_kps,
@@ -8208,13 +8689,7 @@ def convert_payload(
                     best_meta["reordered_keypoints"] = ordered_kps
 
                 best_entries.append(best_meta)
-                if best_meta.get("added_four_point") != True:
-                    _push(step5_outputs, best_meta.copy())
-                elif best_meta.get("added_four_point") == True:
-                    best_meta_copy = best_meta.copy()
-                    best_meta_copy["validation_passed"] = False
-                    best_meta_copy["validation_error"] = validation_error or "Added four points (fallback)"
-                    _push(step5_outputs, best_meta_copy)
+                _push(step5_outputs, best_meta.copy())
             else:
                 if DEBUG_FLAG:
                     print(f"[DEBUG] Frame {fn} - No valid candidate found in Step 4, using orig_kps padded to template_len (no fallback)")
@@ -8236,14 +8711,17 @@ def convert_payload(
                     "decision": decision,
                     "added_four_point": False,
                 }
+                step4_0_ordered_kps = [
+                    [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
+                    for pt in ordered_kps
+                ]
                 similarity_snapshot_for_next = {
                     "frame_id": int(fn),
-                    "reordered_keypoints": [
-                        [float(pt[0]), float(pt[1])] if pt and len(pt) >= 2 else [0.0, 0.0]
-                        for pt in ordered_kps
-                    ],
+                    "reordered_keypoints": step4_0_ordered_kps,
                     "decision": decision,
                 }
+                best_meta["step4_0_reordered_keypoints"] = step4_0_ordered_kps
+                best_meta["score"] = float(best_meta.get("score", 0.0) or 0.0)
                 best_entries.append(best_meta)
                 best_meta_copy = best_meta.copy()
                 best_meta_copy["score"] = best_meta.get("score", 0.0)
@@ -8273,6 +8751,11 @@ def convert_payload(
             prev_valid_original_index = orig_idx_map if best_meta.get("match_idx") is not None else None
             prev_best_meta = similarity_snapshot_for_next if similarity_snapshot_for_next is not None else best_meta.copy()
             prev_valid_frame_id = fn
+            if prev_best_meta is not None:
+                similarity_snapshot_history[int(fn)] = prev_best_meta
+                for old_fid in list(similarity_snapshot_history.keys()):
+                    if old_fid < int(fn) - 3:
+                        similarity_snapshot_history.pop(old_fid, None)
 
             _log(f"{progress_prefix} - done")
             prof.end_frame(frame_id=int(fn), t_frame0=t_frame0, parts_ms=parts_ms)
@@ -8287,7 +8770,7 @@ def convert_payload(
         # Step 7: Interpolate problematic frames (called before Step 8, doesn't need frame_store)
         t7 = time.perf_counter()
         _step7_interpolate_problematic_frames(
-            step5_outputs=step5_outputs,
+            step4_9_outputs=best_entries,
             ordered_frames=ordered_frames,
             template_len=template_len,
             out_step7=Path("keypoint_step_7_interpolated.json"),
