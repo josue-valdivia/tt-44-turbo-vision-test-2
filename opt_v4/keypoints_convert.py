@@ -684,6 +684,98 @@ def _run_step8_adjustment(frames: list[dict[str, Any]], default_width: int | Non
     return processed_count, skipped_count
 
 
+# Pixel distance threshold for two keypoints across frames to be considered "the same"
+SEGMENT_KP_PIXEL_THRESHOLD: float = 30.0
+# Minimum common keypoints required to consider two adjacent frames in the same segment
+SEGMENT_MIN_COMMON_KPS: int = 2
+
+
+def _valid_kps(frame_entry: dict[str, Any]) -> dict[int, tuple[float, float]]:
+    """Return {index: (x, y)} for all non-zero keypoints in a frame."""
+    kps = frame_entry.get("keypoints") or []
+    out: dict[int, tuple[float, float]] = {}
+    for idx, kp in enumerate(kps):
+        if not isinstance(kp, (list, tuple)) or len(kp) < 2:
+            continue
+        x, y = float(kp[0]), float(kp[1])
+        if x != 0.0 or y != 0.0:
+            out[idx] = (x, y)
+    return out
+
+
+def _count_common_kps(
+    a: dict[int, tuple[float, float]],
+    b: dict[int, tuple[float, float]],
+    threshold: float,
+) -> int:
+    """Count keypoint indices present in both frames whose positions are within threshold px."""
+    count = 0
+    for idx, (ax, ay) in a.items():
+        if idx not in b:
+            continue
+        bx, by = b[idx]
+        if ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 <= threshold:
+            count += 1
+    return count
+
+
+def _detect_segments(
+    frames: list[dict[str, Any]],
+) -> tuple[list[list[int]], list[int]]:
+    """
+    Step 2: Segment detection.
+
+    Scans the ordered frame list and groups consecutive frames into segments.
+    Two adjacent frames belong to the same segment when they share at least
+    SEGMENT_MIN_COMMON_KPS keypoints whose positions differ by at most
+    SEGMENT_KP_PIXEL_THRESHOLD pixels.
+
+    Returns:
+        segments  – list of segments, each segment is a list of frame IDs.
+        empty_ids – list of frame IDs that carry no valid keypoints at all.
+    """
+    # Sort frames by frame_id so adjacency is meaningful
+    id_frame: list[tuple[int, dict[str, Any]]] = []
+    empty_ids: list[int] = []
+
+    for fe in frames:
+        if not isinstance(fe, dict):
+            continue
+        raw = fe.get("frame_id", fe.get("frame_number", -1))
+        try:
+            fid = int(raw)
+        except Exception:
+            fid = -1
+        vkps = _valid_kps(fe)
+        if not vkps:
+            empty_ids.append(fid)
+        else:
+            id_frame.append((fid, fe))
+
+    id_frame.sort(key=lambda t: t[0])
+
+    segments: list[list[int]] = []
+    if not id_frame:
+        return segments, sorted(empty_ids)
+
+    current_segment: list[int] = [id_frame[0][0]]
+    prev_vkps = _valid_kps(id_frame[0][1])
+
+    for i in range(1, len(id_frame)):
+        fid, fe = id_frame[i]
+        cur_vkps = _valid_kps(fe)
+        common = _count_common_kps(prev_vkps, cur_vkps, SEGMENT_KP_PIXEL_THRESHOLD)
+        if common >= SEGMENT_MIN_COMMON_KPS:
+            current_segment.append(fid)
+        else:
+            segments.append(current_segment)
+            current_segment = [fid]
+        prev_vkps = cur_vkps
+
+    segments.append(current_segment)
+    return segments, sorted(empty_ids)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run only Step 8 keypoint adjustment.")
     parser.add_argument("--video-url", required=True, help="Path/URL of video (used for frame dimensions).")
@@ -692,6 +784,31 @@ def main() -> None:
 
     raw_data = json.loads(args.unsorted_json.read_text())
     ordered_raw, ordered_frames = _extract_frames_container(raw_data)
+
+    # ── Step 2: segment detection ──────────────────────────────────────────
+    segments, empty_ids = _detect_segments(ordered_frames)
+    total_frames_with_kps = sum(len(s) for s in segments)
+    print(
+        f"Step 2: {len(ordered_frames)} frames total  |  "
+        f"{total_frames_with_kps} with keypoints  |  "
+        f"{len(empty_ids)} empty"
+    )
+    print(f"Step 2: {len(segments)} segment(s) detected "
+          f"(threshold: {SEGMENT_MIN_COMMON_KPS} common kps within {SEGMENT_KP_PIXEL_THRESHOLD}px)")
+    for seg_idx, seg in enumerate(segments):
+        print(f"  segment {seg_idx + 1:>3}: frames {seg[0]:>5} – {seg[-1]:>5}  ({len(seg)} frames)")
+    if empty_ids:
+        ranges: list[str] = []
+        start = prev = empty_ids[0]
+        for eid in empty_ids[1:]:
+            if eid == prev + 1:
+                prev = eid
+            else:
+                ranges.append(f"{start}–{prev}" if start != prev else str(start))
+                start = prev = eid
+        ranges.append(f"{start}–{prev}" if start != prev else str(start))
+        print(f"  empty frames: {', '.join(ranges)}")
+    print()
 
     width, height = _get_video_dims(args.video_url)
     scoring_debug_dir: Path | None = None
