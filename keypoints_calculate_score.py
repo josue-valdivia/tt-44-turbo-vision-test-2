@@ -36,10 +36,10 @@ import cv2
 import numpy as np
 
 # Optional: process only specific frames (comment out to process all frames)
-ONLY_FRAMES = list(range(395, 396))
+# ONLY_FRAMES = list(range(8, 11))
 
 # Debug flag: if True, output dtailed logs and step-by-step debug images
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 
 # --------------------------- Data / Models --------------------------- #
 class SVRunOutput:

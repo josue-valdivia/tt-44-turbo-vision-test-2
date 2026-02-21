@@ -10,12 +10,28 @@ import cv2
 import numpy as np
 
 STEP6_FILL_MISSING_ENABLED = True
+# If False, skip Step 7 interpolation.
+STEP7_ENABLED = True
+# Each pass interpolates frames below the threshold using neighbours above it.
+# Passes run in order, so later passes with higher thresholds can fix more frames
+# using the keypoints that were already updated by earlier passes.
+STEP7_SCORE_THRESHOLDS: list[float] = [0.3, 0.5, 0.7]
+# Max frame count between backward and forward good frames; if gap > this, skip.
+STEP7_MAX_GAP: int = 20
 # If False, skip Step 8 keypoint adjustment.
 STEP8_ENABLED = True
 # Optional: process only specific frames. Keep empty to process all.
-# ONLY_FRAMES: list[int] = list(range(395, 396))
+# ONLY_FRAMES: list[int] = list(range(8, 11))
 # If True, write step-by-step scoring debug images.
 DEBUG_FLAG = False
+
+# Step 5: weighted homography schemes (indices into keypoints / FOOTBALL_KEYPOINTS_CORRECTED)
+STEP5_H1_WEIGHT_2_INDICES: list[int] = [4, 9, 10, 11, 12, 17, 18, 19, 20, 28]
+STEP5_H2_WEIGHT_3_INDICES: list[int] = [13, 14, 15]
+STEP5_H2_WEIGHT_4_INDICES: list[int] = [5, 16, 29]
+STEP5_H3_WEIGHT_2_INDICES: list[int] = [4, 9, 10, 11, 12, 17, 18, 19, 20, 28]
+STEP5_H3_WEIGHT_3_INDICES: list[int] = [13, 14, 15]
+STEP5_H3_WEIGHT_4_INDICES: list[int] = [5, 16, 29]
 
 FOOTBALL_KEYPOINTS: list[tuple[int, int]] = [
     (5, 5),
@@ -462,6 +478,71 @@ class _FrameStore:
 
 
 
+def _weight_map_h1() -> dict[int, int]:
+    return {i: 2 for i in STEP5_H1_WEIGHT_2_INDICES}
+
+
+def _weight_map_h2() -> dict[int, int]:
+    m: dict[int, int] = {}
+    for i in STEP5_H2_WEIGHT_3_INDICES:
+        m[i] = 3
+    for i in STEP5_H2_WEIGHT_4_INDICES:
+        m[i] = 4
+    return m
+
+
+def _weight_map_h3() -> dict[int, int]:
+    m: dict[int, int] = {}
+    for i in STEP5_H3_WEIGHT_2_INDICES:
+        m[i] = 2
+    for i in STEP5_H3_WEIGHT_3_INDICES:
+        m[i] = 3
+    for i in STEP5_H3_WEIGHT_4_INDICES:
+        m[i] = 4
+    return m
+
+
+def _find_homography_weighted(
+    valid_indices: list[int],
+    valid_src: list[tuple[float, float]],
+    valid_dst: list[tuple[float, float]],
+    weight_by_index: dict[int, int],
+) -> np.ndarray | None:
+    """Build weighted point arrays (repeat by weight) and compute H. Returns None on failure."""
+    src_list: list[tuple[float, float]] = []
+    dst_list: list[tuple[float, float]] = []
+    for idx, (s, d) in zip(valid_indices, zip(valid_src, valid_dst)):
+        w = max(1, weight_by_index.get(idx, 1))
+        for _ in range(w):
+            src_list.append(s)
+            dst_list.append(d)
+    if len(src_list) < 4:
+        return None
+    src_np = np.array(src_list, dtype=np.float32)
+    dst_np = np.array(dst_list, dtype=np.float32)
+    H, _ = cv2.findHomography(src_np, dst_np)
+    return H
+
+
+def _score_given_H(
+    H: np.ndarray,
+    template_image: np.ndarray,
+    video_frame: np.ndarray,
+) -> float:
+    """Score one homography: warp template, masks, overlap ratio. Returns 0.0 on failure."""
+    try:
+        h, w = video_frame.shape[:2]
+        warped = cv2.warpPerspective(template_image, H, (w, h))
+        ground_mask, line_mask = _extract_masks(warped)
+        predicted_mask = _predicted_lines_mask(video_frame, ground_mask)
+        overlap = cv2.bitwise_and(line_mask, predicted_mask)
+        pixels_on_lines = int(line_mask.sum())
+        pixels_overlap = int(overlap.sum())
+        return float(pixels_overlap) / float(pixels_on_lines + 1e-8)
+    except Exception:
+        return 0.0
+
+
 def _score_frames_from_input_keypoints(
     frames: list[dict[str, Any]],
     default_width: int | None,
@@ -471,14 +552,13 @@ def _score_frames_from_input_keypoints(
     frame_store: "_FrameStore | None" = None,
 ) -> tuple[list[dict[str, float | int]], float]:
     """
-    Score input keypoints using the exact same pipeline as keypoints_calculate_score.py:
-      1. Build H from FOOTBALL_KEYPOINTS_CORRECTED -> observed frame keypoints.
-      2. Warp football_pitch_template.png into frame space using H.
-      3. Extract ground mask (threshold > 10) and expected line mask (threshold > 200).
-      4. Extract predicted lines: top-hat + Gaussian blur + Canny + dilate, masked by ground.
-      5. Score = overlap(expected_lines, predicted_lines) / expected_line_pixels.
+    Step 5: Score and re-project keypoints.
+
+    Try three weighted homographies (H1, H2, H3), score each, pick the best,
+    then re-project keypoints using the selected H.
+    Pipeline per H: warp template -> ground/line masks -> predicted lines -> overlap ratio.
     """
-    print("Input keypoint scores (using FOOTBALL_KEYPOINTS_CORRECTED homography):")
+    print("Step 5: scoring (H1/H2/H3 weighted) and re-projecting keypoints:")
     template_image = _challenge_template()
     per_frame: list[dict[str, float | int]] = []
     scores: list[float] = []
@@ -504,15 +584,17 @@ def _score_frames_from_input_keypoints(
             scores.append(0.0)
             continue
 
-        # Collect valid FOOTBALL_KEYPOINTS_CORRECTED -> frame correspondences
+        # Collect valid correspondences with indices (for weighted H)
+        valid_indices: list[int] = []
         valid_src: list[tuple[float, float]] = []
         valid_dst: list[tuple[float, float]] = []
         for idx, kp in enumerate(kps):
             if not isinstance(kp, list) or len(kp) < 2:
                 continue
             x, y = float(kp[0]), float(kp[1])
-            if abs(x) < 1e-6 and abs(y) < 1e-6:
+            if x == 0.0 and y == 0.0:
                 continue
+            valid_indices.append(idx)
             valid_src.append(FOOTBALL_KEYPOINTS_CORRECTED[idx])
             valid_dst.append((x, y))
 
@@ -521,7 +603,6 @@ def _score_frames_from_input_keypoints(
             scores.append(0.0)
             continue
 
-        # Read actual video frame (needed for edge detection and dimensions)
         video_frame = frame_store.get(frame_id) if frame_store else None
         if video_frame is None:
             per_frame.append({"frame": frame_id, "score": 0.0})
@@ -529,51 +610,106 @@ def _score_frames_from_input_keypoints(
             continue
         frame_height, frame_width = video_frame.shape[:2]
 
-        # Warp template using H from FOOTBALL_KEYPOINTS_CORRECTED -> frame
-        try:
-            warped = _warp_template(
-                template_image.copy(), valid_src, valid_dst, frame_width, frame_height
-            )
-        except (ValueError, _InvalidMask):
+        # Try H1, H2, H3 with their weight schemes
+        w1 = _weight_map_h1()
+        w2 = _weight_map_h2()
+        w3 = _weight_map_h3()
+        H1 = _find_homography_weighted(valid_indices, valid_src, valid_dst, w1)
+        H2 = _find_homography_weighted(valid_indices, valid_src, valid_dst, w2)
+        H3 = _find_homography_weighted(valid_indices, valid_src, valid_dst, w3)
+
+        score1 = _score_given_H(H1, template_image, video_frame) if H1 is not None else 0.0
+        score2 = _score_given_H(H2, template_image, video_frame) if H2 is not None else 0.0
+        score3 = _score_given_H(H3, template_image, video_frame) if H3 is not None else 0.0
+
+        # Pick best H (and tie-break by H1 < H2 < H3)
+        best_score = score1
+        best_H = H1
+        best_label = "H1"
+        if score2 > best_score:
+            best_score = score2
+            best_H = H2
+            best_label = "H2"
+        if score3 > best_score:
+            best_score = score3
+            best_H = H3
+            best_label = "H3"
+
+        if best_H is None:
             per_frame.append({"frame": frame_id, "score": 0.0})
             scores.append(0.0)
             continue
 
-        # Extract ground and expected line masks from warped template
-        try:
-            ground_mask, line_mask = _extract_masks(warped)
-        except _InvalidMask:
-            per_frame.append({"frame": frame_id, "score": 0.0})
-            scores.append(0.0)
-            continue
-
-        # Extract predicted lines from the real frame using edge detection
-        predicted_mask = _predicted_lines_mask(video_frame, ground_mask)
-
-        # Score = overlap / expected_line_pixels  (same formula as keypoints_calculate_score.py)
-        overlap = cv2.bitwise_and(line_mask, predicted_mask)
-        pixels_on_lines = int(line_mask.sum())
-        pixels_overlap = int(overlap.sum())
-        frame_score = float(pixels_overlap) / float(pixels_on_lines + 1e-8)
+        # Re-project keypoints using the selected H
+        src_all = np.array(FOOTBALL_KEYPOINTS_CORRECTED, dtype=np.float32).reshape(1, -1, 2)
+        projected = cv2.perspectiveTransform(src_all, best_H)[0]
+        frame_entry["keypoints"] = [[float(projected[i][0]), float(projected[i][1])] for i in range(len(FOOTBALL_KEYPOINTS_CORRECTED))]
 
         if DEBUG_FLAG and debug_dir is not None:
-            _write_scoring_debug_images(
-                frame_id=frame_id,
-                out_dir=debug_dir,
-                video_frame=video_frame,
-                warped_template=warped,
-                ground_mask=ground_mask,
-                line_mask=line_mask,
-                predicted_mask=predicted_mask,
-                score=frame_score,
-            )
+            warped = cv2.warpPerspective(template_image, best_H, (frame_width, frame_height))
+            try:
+                ground_mask, line_mask = _extract_masks(warped)
+                predicted_mask = _predicted_lines_mask(video_frame, ground_mask)
+                _write_scoring_debug_images(
+                    frame_id=frame_id,
+                    out_dir=debug_dir,
+                    video_frame=video_frame,
+                    warped_template=warped,
+                    ground_mask=ground_mask,
+                    line_mask=line_mask,
+                    predicted_mask=predicted_mask,
+                    score=best_score,
+                )
+            except Exception:
+                pass
 
-        print(f"  frame {frame_id}: {frame_score:.4f}", end="\r", flush=True)
-        per_frame.append({"frame": frame_id, "score": frame_score})
-        scores.append(frame_score)
+        print(f"  frame {frame_id}: {best_score:.4f} ({best_label})", end="\r", flush=True)
+        per_frame.append({"frame": frame_id, "score": best_score})
+        scores.append(best_score)
 
     avg_score = (sum(scores) / len(scores)) if scores else 0.0
     return per_frame, float(avg_score)
+
+
+def _score_single_frame(
+    keypoints: list[list[float]],
+    video_frame: np.ndarray,
+    template_image: np.ndarray,
+) -> float:
+    """
+    Score one frame's keypoints using the same pipeline as Step 5.
+    Returns 0.0 on any failure or if < 4 valid correspondences.
+    """
+    if not isinstance(keypoints, list) or len(keypoints) != len(FOOTBALL_KEYPOINTS_CORRECTED):
+        return 0.0
+    valid_src: list[tuple[float, float]] = []
+    valid_dst: list[tuple[float, float]] = []
+    for idx, kp in enumerate(keypoints):
+        if not isinstance(kp, (list, tuple)) or len(kp) < 2:
+            continue
+        x, y = float(kp[0]), float(kp[1])
+        if x == 0.0 and y == 0.0:
+            continue
+        valid_src.append(FOOTBALL_KEYPOINTS_CORRECTED[idx])
+        valid_dst.append((x, y))
+    if len(valid_src) < 4:
+        return 0.0
+    frame_height, frame_width = video_frame.shape[:2]
+    try:
+        warped = _warp_template(
+            template_image.copy(), valid_src, valid_dst, frame_width, frame_height
+        )
+    except (ValueError, _InvalidMask):
+        return 0.0
+    try:
+        ground_mask, line_mask = _extract_masks(warped)
+    except _InvalidMask:
+        return 0.0
+    predicted_mask = _predicted_lines_mask(video_frame, ground_mask)
+    overlap = cv2.bitwise_and(line_mask, predicted_mask)
+    pixels_on_lines = int(line_mask.sum())
+    pixels_overlap = int(overlap.sum())
+    return float(pixels_overlap) / float(pixels_on_lines + 1e-8)
 
 
 def _run_step8_adjustment(frames: list[dict[str, Any]], default_width: int | None, default_height: int | None) -> tuple[int, int]:
@@ -682,6 +818,301 @@ def _run_step8_adjustment(frames: list[dict[str, Any]], default_width: int | Non
         f"(adjusted: {processed_count}, skipped: {skipped_count})."
     )
     return processed_count, skipped_count
+
+
+def _draw_keypoints_on_frame(frame: np.ndarray, keypoints: list[Any], color: tuple[int, int, int] = (0, 255, 0), radius: int = 4) -> np.ndarray:
+    """Draw keypoints on a copy of the frame. Non-zero keypoints only."""
+    out = frame.copy()
+    for kp in keypoints:
+        if not isinstance(kp, (list, tuple)) or len(kp) < 2:
+            continue
+        x, y = int(round(float(kp[0]))), int(round(float(kp[1])))
+        if x == 0 and y == 0:
+            continue
+        cv2.circle(out, (x, y), radius, color, 2)
+    return out
+
+
+def _write_step7_debug_images(
+    *,
+    out_dir: Path,
+    backward_id: int,
+    forward_id: int,
+    interp_id: int,
+    weight: float,
+    bwd_frame: np.ndarray,
+    fwd_frame: np.ndarray,
+    interp_frame: np.ndarray,
+    bwd_kps: list[Any],
+    fwd_kps: list[Any],
+    new_kps: list[list[float]],
+    template_image: np.ndarray,
+    before_score: float,
+    new_score: float,
+    applied: bool,
+) -> None:
+    """Write Step 7 debug images: backward/forward with kps, averaged frame, interp frame with kps, score pipeline."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) Backward frame with keypoints
+    img_bwd = _draw_keypoints_on_frame(bwd_frame, bwd_kps, (0, 255, 0))
+    cv2.imwrite(str(out_dir / "01_backward_frame_with_keypoints.jpg"), img_bwd)
+
+    # 2) Forward frame with keypoints
+    img_fwd = _draw_keypoints_on_frame(fwd_frame, fwd_kps, (255, 0, 0))
+    cv2.imwrite(str(out_dir / "02_forward_frame_with_keypoints.jpg"), img_fwd)
+
+    # 3) Averaged image (blend of backward and forward) for this frame
+    blend = cv2.addWeighted(bwd_frame, 1.0 - weight, fwd_frame, weight, 0)
+    cv2.imwrite(str(out_dir / "03_interp_frame_averaged.jpg"), blend)
+
+    # 4) Interp frame with interpolated keypoints
+    img_interp = _draw_keypoints_on_frame(interp_frame, new_kps, (0, 255, 255))
+    cv2.imwrite(str(out_dir / "04_interp_frame_with_interpolated_keypoints.jpg"), img_interp)
+
+    # 5–9) Score calculation pipeline from interpolated keypoints
+    try:
+        valid_src, valid_dst = [], []
+        for idx, kp in enumerate(new_kps):
+            if not kp or (float(kp[0]) == 0.0 and float(kp[1]) == 0.0):
+                continue
+            valid_src.append(FOOTBALL_KEYPOINTS_CORRECTED[idx])
+            valid_dst.append((float(kp[0]), float(kp[1])))
+        if len(valid_src) >= 4:
+            src_np = np.array(valid_src, dtype=np.float32)
+            dst_np = np.array(valid_dst, dtype=np.float32)
+            H, _ = cv2.findHomography(src_np, dst_np)
+            if H is not None:
+                h, w = interp_frame.shape[:2]
+                warped = cv2.warpPerspective(template_image, H, (w, h))
+                cv2.imwrite(str(out_dir / "05_warped_template.jpg"), warped)
+                ground_mask, line_mask = _extract_masks(warped)
+                cv2.imwrite(str(out_dir / "06_ground_mask.jpg"), ground_mask * 255)
+                cv2.imwrite(str(out_dir / "07_line_mask_expected.jpg"), line_mask * 255)
+                predicted_mask = _predicted_lines_mask(interp_frame, ground_mask)
+                cv2.imwrite(str(out_dir / "08_predicted_lines.jpg"), predicted_mask * 255)
+                overlap = cv2.bitwise_and(line_mask, predicted_mask)
+                vis = interp_frame.copy()
+                vis[line_mask == 1] = (0, 0, 180)
+                vis[overlap == 1] = (0, 220, 0)
+                cv2.imwrite(str(out_dir / "09_overlap_on_frame.jpg"), vis)
+    except Exception:
+        pass
+
+    meta = {
+        "backward_id": backward_id,
+        "forward_id": forward_id,
+        "interp_id": interp_id,
+        "weight": round(weight, 4),
+        "before_score": round(before_score, 4),
+        "new_score": round(new_score, 4),
+        "applied": applied,
+    }
+    (out_dir / "score_meta.json").write_text(json.dumps(meta, indent=2))
+
+
+def _common_indices_in_frame(
+    a: list[Any],
+    b: list[Any],
+    frame_width: int,
+    frame_height: int,
+) -> list[int]:
+    """Indices where both keypoints are non-zero and within frame bounds (0 <= x < w, 0 <= y < h)."""
+    out: list[int] = []
+    for i in range(min(len(a), len(b))):
+        ka, kb = a[i], b[i]
+        if not (isinstance(ka, (list, tuple)) and len(ka) >= 2):
+            continue
+        if not (isinstance(kb, (list, tuple)) and len(kb) >= 2):
+            continue
+        xa, ya = float(ka[0]), float(ka[1])
+        xb, yb = float(kb[0]), float(kb[1])
+        if xa == 0.0 and ya == 0.0:
+            continue
+        if xb == 0.0 and yb == 0.0:
+            continue
+        if not (0 <= xa < frame_width and 0 <= ya < frame_height):
+            continue
+        if not (0 <= xb < frame_width and 0 <= yb < frame_height):
+            continue
+        out.append(i)
+    return out
+
+
+def _run_step7_interpolation(
+    frames: list[dict[str, Any]],
+    per_frame_scores: list[dict[str, float | int]],
+    segments: list[list[int]],
+    frame_store: "_FrameStore | None" = None,
+    debug_dir: Path | None = None,
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+) -> int:
+    """
+    Step 7: Multi-pass keypoint interpolation.
+
+    Runs one pass per threshold in STEP7_SCORE_THRESHOLDS (ascending).
+    In each pass, frames whose Step-5 score is below the threshold are
+    "problematic"; the nearest backward/forward frames at or above the
+    threshold are the anchors.  Interpolation is only applied when both
+    anchors belong to the same Step-2 segment and the gap <= STEP7_MAX_GAP.
+
+    For each candidate interpolation we score the new keypoints; we only
+    write them when the new score is higher than the original (Step-5) score.
+
+    Returns the total number of frame-keypoint replacements across all passes.
+    """
+    if not STEP7_ENABLED:
+        print("Step 7: skipped (STEP7_ENABLED=False).")
+        return 0
+
+    template_image = _challenge_template()
+    score_map: dict[int, float] = {int(item["frame"]): float(item["score"]) for item in per_frame_scores}
+    sorted_ids = sorted(score_map.keys())
+    if not sorted_ids:
+        print("Step 7: no scored frames available.")
+        return 0
+
+    # frame_id -> segment index
+    frame_to_seg: dict[int, int] = {}
+    for seg_idx, seg in enumerate(segments):
+        for fid in seg:
+            frame_to_seg[fid] = seg_idx
+
+    frame_data_map: dict[int, dict[str, Any]] = {}
+    for fe in frames:
+        if not isinstance(fe, dict):
+            continue
+        raw = fe.get("frame_id", fe.get("frame_number", -1))
+        try:
+            fid = int(raw)
+        except Exception:
+            continue
+        frame_data_map[fid] = fe
+
+    def _common_indices(a: list[Any], b: list[Any]) -> list[int]:
+        out: list[int] = []
+        for i in range(min(len(a), len(b))):
+            ka, kb = a[i], b[i]
+            if (isinstance(ka, (list, tuple)) and len(ka) >= 2
+                    and not (float(ka[0]) == 0.0 and float(ka[1]) == 0.0)
+                    and isinstance(kb, (list, tuple)) and len(kb) >= 2
+                    and not (float(kb[0]) == 0.0 and float(kb[1]) == 0.0)):
+                out.append(i)
+        return out
+
+    template_len = len(FOOTBALL_KEYPOINTS)
+    total_updated = 0
+
+    for threshold in STEP7_SCORE_THRESHOLDS:
+        problematic = [fid for fid in sorted_ids if score_map[fid] < threshold]
+        if not problematic:
+            print(f"  pass {threshold}: no problematic frames")
+            continue
+
+        pass_count = 0
+        already_rewritten: set[int] = set()
+
+        for problem_id in problematic:
+            backward_id: int | None = None
+            for fid in reversed(sorted_ids):
+                if fid < problem_id and score_map[fid] >= threshold:
+                    backward_id = fid
+                    break
+
+            forward_id: int | None = None
+            for fid in sorted_ids:
+                if fid > problem_id and score_map[fid] >= threshold:
+                    forward_id = fid
+                    break
+
+            if backward_id is None or forward_id is None:
+                continue
+            if frame_to_seg.get(backward_id) != frame_to_seg.get(forward_id):
+                continue
+
+            gap = forward_id - backward_id
+            if gap > STEP7_MAX_GAP:
+                continue
+            bwd_fe = frame_data_map.get(backward_id)
+            fwd_fe = frame_data_map.get(forward_id)
+            if bwd_fe is None or fwd_fe is None:
+                continue
+
+            bwd_kps: list[Any] = bwd_fe.get("keypoints") or []
+            fwd_kps: list[Any] = fwd_fe.get("keypoints") or []
+            if frame_width is not None and frame_height is not None:
+                common_set = set(_common_indices_in_frame(bwd_kps, fwd_kps, frame_width, frame_height))
+            else:
+                common_set = set(_common_indices(bwd_kps, fwd_kps))
+
+            if len(common_set) < 4:
+                continue
+
+            for interp_id in sorted_ids:
+                if not (backward_id < interp_id < forward_id):
+                    continue
+                if interp_id in already_rewritten:
+                    continue
+                fe = frame_data_map.get(interp_id)
+                if fe is None:
+                    continue
+                weight = (interp_id - backward_id) / gap
+                max_len = max(len(bwd_kps), len(fwd_kps), template_len)
+                new_kps = []
+                for i in range(max_len):
+                    if i in common_set:
+                        bx = float(bwd_kps[i][0])
+                        by = float(bwd_kps[i][1])
+                        fx = float(fwd_kps[i][0])
+                        fy = float(fwd_kps[i][1])
+                        new_kps.append([bx + (fx - bx) * weight, by + (fy - by) * weight])
+                    else:
+                        new_kps.append([0.0, 0.0])
+                # Only update when the interpolated keypoints score higher than original
+                before_score = score_map[interp_id]
+                if frame_store is None:
+                    continue
+                video_frame = frame_store.get(interp_id)
+                if video_frame is None:
+                    continue
+                new_score = _score_single_frame(new_kps, video_frame, template_image)
+                applied = new_score > before_score
+
+                if DEBUG_FLAG and debug_dir is not None and frame_store is not None:
+                    bwd_frame = frame_store.get(backward_id)
+                    fwd_frame = frame_store.get(forward_id)
+                    if bwd_frame is not None and fwd_frame is not None:
+                        step7_dir = debug_dir / "step7" / f"frame_{interp_id:04d}_bwd{backward_id}_fwd{forward_id}"
+                        _write_step7_debug_images(
+                            out_dir=step7_dir,
+                            backward_id=backward_id,
+                            forward_id=forward_id,
+                            interp_id=interp_id,
+                            weight=weight,
+                            bwd_frame=bwd_frame,
+                            fwd_frame=fwd_frame,
+                            interp_frame=video_frame,
+                            bwd_kps=bwd_kps,
+                            fwd_kps=fwd_kps,
+                            new_kps=new_kps,
+                            template_image=template_image,
+                            before_score=before_score,
+                            new_score=new_score,
+                            applied=applied,
+                        )
+
+                if not applied:
+                    continue
+                fe["keypoints"] = new_kps
+                already_rewritten.add(interp_id)
+                pass_count += 1
+
+        print(f"  pass {threshold}: interpolated {pass_count} frame(s)")
+        total_updated += pass_count
+
+    print(f"Step 7: {total_updated} frame(s) interpolated across {len(STEP7_SCORE_THRESHOLDS)} passes (max_gap={STEP7_MAX_GAP})")
+    return total_updated
 
 
 # Pixel distance threshold for two keypoints across frames to be considered "the same"
@@ -820,9 +1251,17 @@ def main() -> None:
         per_frame_scores, avg_score = _score_frames_from_input_keypoints(
             ordered_frames, width, height, debug_dir=scoring_debug_dir, frame_store=frame_store
         )
+        print(f"\nAverage input keypoint score: {avg_score:.4f}")
+
+        _run_step7_interpolation(
+            ordered_frames, per_frame_scores, segments,
+            frame_store=frame_store,
+            debug_dir=scoring_debug_dir,
+            frame_width=width,
+            frame_height=height,
+        )
     finally:
         frame_store.close()
-    print(f"\nAverage input keypoint score: {avg_score:.4f}")
 
     if STEP8_ENABLED:
         _run_step8_adjustment(ordered_frames, width, height)
