@@ -1,77 +1,290 @@
 
-=== Scorevision DB lookup 2026-02-15T23:55:06.456562+00:00 ===
-HOTKEY_ME:    5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5
-HOTKEY_OTHER: 5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm
+=== Scorevision DB lookup 2026-02-21T01:45:06.416557+00:00 ===
+HOTKEY_ME:    5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB
+HOTKEY_OTHER: 5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9
 N per DB:     5 (last N links from each database)
 Compare mode: total
 
---- Collecting evaluation URLs ---
+================= Collecting evaluation URLs =================
 Me:    20 evaluation URLs
 Other: 20 evaluation URLs
 
---- Fetching evaluation JSONs ---
+================= Fetching evaluation JSONs ==================
 Me:    20 tasks with scores
 Other: 20 tasks with scores
 
---- Comparison report (common task_id) ---
-Common task_ids: 0
+========================== Summary ===========================
+Common tasks: 20
+Me wins:      7
+Other wins:   1
+Ties:         11
+Excluded:     1 (score is 0.0/None on either side)
+✅ You win  | Average (total, common, incl. 0.0)   - you: 0.7375, other: 0.6824 (n=20)
+✅ You win  | Average (total, common, excl. 0.0)   - you: 0.7374, other: 0.7184 (n=19)
+✅ You win  | Average (total, all tasks, incl. 0.0) - you: 0.7375, other: 0.6824 (you_n=20, other_n=20)
 
---- Me: all task_ids (score, evaluation_url) ---
-  task_id 52236  score=0.7882  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552303-eb55b29333d1cd92c1d1dd9e16dd9b85b4f31d0b558fd41e484824d96cf5ae8e.json
-  task_id 52350  score=0.7850  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007550835-bd3546d3661431480f7d34af04b7ea5deb806587c4f8625b7963714d1fe68364.json
-  task_id 52358  score=0.8389  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551379-3d8e9222b82dc6573f39861b65152d41342b97dcff4864331d022143f813f688.json
-  task_id 52444  score=0.8212  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551689-12330ed06597ee8491dc3b4f90381dfa87d1c1172a87bac82b430d6d5d60974f.json
-  task_id 52462  score=0.0000  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552654-67e927c3b82a0deae654bbbeeea3c4e12416554d02b9136204c39b837439ae12.json
-  task_id 52524  score=0.0000  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551198-d610063400f1394bf08c7ce1c5dca7d35d5b729bfcd929f01eb5cf15dec1edf2.json
-  task_id 52528  score=0.8010  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551748-19913301b4ed4c23855f5d3c0c51cf250360bbddc68e831c52c493fea81e3ce2.json
-  task_id 52537  score=0.8454  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552333-2a3069620a0a39e54932ab48282b0865a49f2b1d99ea2a9b35f0aa47288cbba3.json
-  task_id 52610  score=0.6877  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551943-1548b3893aee4b66a927d88f4d0a9a4d22b079e4dc31d9f4d66ddcbbfd3dc5b8.json
-  task_id 52614  score=0.7962  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551101-e7993033a7af6d7a36b02f415096ddca0e59b84a11faaf2ece57364e34a461ef.json
-  task_id 52625  score=0.2538  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551081-96ec34ebb62d1f01583955dd14d9782ffa5d1e702311df16bc433357750a055e.json
-  task_id 52644  score=0.8402  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552529-9e4ecd6472b3210d234817bc7e55c8cec941a44435d65ce9e4edb83a48620aa5.json
-  task_id 52650  score=0.7796  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551805-f10175f6710be189c73f48857277461062e3431dab3cfcf8a2f253473405e4ae.json
-  task_id 52690  score=0.8185  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551487-d5605dc52fd4e0b932afe005fd848d59b27e2457fe9383c8cdb7c44a26679cbd.json
-  task_id 52725  score=0.8387  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007550800-78e268886608fd7bf1873af1834b4c61c7c7616e03500a598d9c10c0aebd9147.json
-  task_id 52728  score=0.8406  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552639-a315216e48e3a30a60d2f42265aaf74fe074e1e806d4f4d204cd77a87718eeb3.json
-  task_id 52752  score=0.8558  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552628-035a1ac931f712ee9d637e23c444791a4266ed2be68d5c012fea185ec9382fb7.json
-  task_id 52762  score=0.8804  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007550823-be74a035e1465dce3f6f5f9f65d32f7079a8d1aaa978d31656cb535a82abff30.json
-  task_id 52791  score=0.8851  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552240-20419977f527155edc1fa49ac87fb4ca281f65927aa9fdb570e0dc79df8ff641.json
-  task_id 52808  score=0.8742  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551503-829def9ccdc12a7da419696933e32d1d5facea671d9ab7eb717d7fc35444eec3.json
+====================== 0 scoring cases =======================
+  other task_id 51730  [Error] ❌ There was a problem during prediction: Response payload is not completed: <ContentLengthError: 400, message='Not enough data to satisfy content length header.'>  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588359-bc6d43e3ed48973d93a843d213522e411c20f74c539c85bc2bd9add62dee3693.json
 
---- Other: all task_ids (score, evaluation_url) ---
-  task_id 42310  score=0.0000  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178282-af101c5872098f1fe09dae887abaf11f5cfda33cc2d44a0d09ce56789e124435.json
-  task_id 42350  score=0.0000  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178134-8780be874f25e199e87221d3adab527fc2ace65496edda186dc72ff3a8000cdf.json
-  task_id 42378  score=0.0000  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007177687-befc27e8f1b9d2662d9b144cd519c1c55441e97d26f03a65e15bdf73c923c12b.json
-  task_id 42550  score=0.0000  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007177527-eeb553a6380f317b84b1f00128d5a15685e36cae431f0e75b9c441653ff83198.json
-  task_id 42642  score=0.0000  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178440-93f8de292e0262c2100080d42d96f5f0f5225c6dc5389dbeff84ccb952968915.json
-  task_id 51896  score=0.7439  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007538234-b9c29238bc73884fba670c0c367a2f0f58529ebb26d2fafeaade7edb00a9f1ca.json
-  task_id 52049  score=0.7873  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007539748-cd06bc380c0ce459d7634dca415025f33241e6768b6598ac6c8d3c81448a8b48.json
-  task_id 52094  score=0.7334  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007538840-a6d685266ec1f745af042c2aac2f47ebdc4ecd767b2fd01a048bcd1092c891fa.json
-  task_id 52126  score=0.0000  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540652-601b45c08e273cb008d928699352231f944a1bc883c07d007798366ebcb5b05b.json
-  task_id 52131  score=0.7678  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007538605-34343f7ecd229b6283c6f776dffa77698db54947e61948552d65dfd4668397cc.json
-  task_id 52237  score=0.7445  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007541440-fdd212fd85ae0e7ffc7688091ca5f0c2bfb2cd08b7ac4b7f368fccb6a365646f.json
-  task_id 52284  score=0.0000  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540552-28157d3d38551eb5b570fe1b467c80c125192adbb10cb2c9a13abeb7cf44b75f.json
-  task_id 52309  score=0.6050  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007539936-bce80e1a84d6557e27c2fc3652effed206dd6de95dea81f2d208da708b32c3c8.json
-  task_id 52357  score=0.7977  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007541536-5ff6629c42c5bb2dc4dc390d7822f9c7d898be3ba4de0bb7151a0d8209fdb1d1.json
-  task_id 52438  score=0.8531  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540264-09285006a6c5ab06d981a67082b6ccc30435ce3a99d41c02c5dd7bc3e9a3c581.json
-  task_id 52440  score=0.7969  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007539438-ca20d1808bd302e6ee31d4022a3a375017597f2916844df6244b0693f0ea7338.json
-  task_id 52506  score=0.8002  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540027-92c562f7a17a1c80536c539483a611cfacfd411bb0690e2846c2a53833377379.json
-  task_id 52538  score=0.8072  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007541269-4c876af756d9d1e2a91d03697f55a1bf5d4063c1d970a5b7d667d7ae6792cdff.json
-  task_id 52566  score=0.8061  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007541179-c5b0435791d42a17135826f695845cda0ed4da6951d08ef6d5fb1d3e5529d44a.json
-  task_id 52600  score=0.7713  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540333-886a7e81f5a2e7c33b81390263f47113adf52a71c6de8e012d74aa0bbb80ba88.json
+============= Comparison report (common task_id) =============
+Common task_ids: 20
 
---- 0-scoring cases ---
-  me   task_id 52462  [Error] error:ValueError:Chutes warmup failed.  https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007552654-67e927c3b82a0deae654bbbeeea3c4e12416554d02b9136204c39b837439ae12.json
-  me   task_id 52524  [Error] error:ValueError:Chutes warmup failed.  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5HE5eQUC5zd9G87WazpzFjYeoE2LQg8hKt9y88hsBhquLYz5/evaluation/007551198-d610063400f1394bf08c7ce1c5dca7d35d5b729bfcd929f01eb5cf15dec1edf2.json
-  other task_id 42310  [Error] error:ValueError:Chutes warmup failed.  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178282-af101c5872098f1fe09dae887abaf11f5cfda33cc2d44a0d09ce56789e124435.json
-  other task_id 42350  [Error] error:ValueError:Chutes warmup failed.  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178134-8780be874f25e199e87221d3adab527fc2ace65496edda186dc72ff3a8000cdf.json
-  other task_id 42378  [Error] error:ValueError:Chutes warmup failed.  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007177687-befc27e8f1b9d2662d9b144cd519c1c55441e97d26f03a65e15bdf73c923c12b.json
-  other task_id 42550  [Error] error:ValueError:Chutes warmup failed.  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007177527-eeb553a6380f317b84b1f00128d5a15685e36cae431f0e75b9c441653ff83198.json
-  other task_id 42642  [Error] error:ValueError:Chutes warmup failed.  https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer_tv/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007178440-93f8de292e0262c2100080d42d96f5f0f5225c6dc5389dbeff84ccb952968915.json
-  other task_id 52126  [Error] error:ValueError:Chutes warmup failed.  https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540652-601b45c08e273cb008d928699352231f944a1bc883c07d007798366ebcb5b05b.json
-  other task_id 52284  [Error] error:ValueError:Chutes warmup failed.  https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5Ca2CVevqG4s7iu3vLMNq2e2tGz9PMLLbzLeF9Pqneh4zsrm/evaluation/007540552-28157d3d38551eb5b570fe1b467c80c125192adbb10cb2c9a13abeb7cf44b75f.json
+task_id 51461 [block=7589192]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007589192-ab5130a114509ed1ab1f9658b8f92d16fd203838757f5af130c8be35014160af.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007589192-ab5130a114509ed1ab1f9658b8f92d16fd203838757f5af130c8be35014160af.json
+  OTHER evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007589196-ab5130a114509ed1ab1f9658b8f92d16fd203838757f5af130c8be35014160af.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007589196-ab5130a114509ed1ab1f9658b8f92d16fd203838757f5af130c8be35014160af.json
+  video            URL: https://scoredata.me/chunks/20a3aefdadfb48679a29f1fe863bc6.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.1794    | 0.9067    | 0.7976    | 139       |
+  | other          | 0.1794    | 0.9067    | 0.7976    | 142       |
+  +----------------+-----------+-----------+-----------+-----------+
 
---- Summary ---
-Common tasks: 0 (no overlap - see above for full task lists)
+task_id 53170 [block=7588836]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588836-a9498e8de7b216e7fcd97193672290abbc4432d2206302d8ec24bd959700dd08.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588836-a9498e8de7b216e7fcd97193672290abbc4432d2206302d8ec24bd959700dd08.json
+  OTHER evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588840-a9498e8de7b216e7fcd97193672290abbc4432d2206302d8ec24bd959700dd08.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588840-a9498e8de7b216e7fcd97193672290abbc4432d2206302d8ec24bd959700dd08.json
+  video            URL: https://scoredata.me/chunks/727d256cb2bc448a88573e2ab4f47b.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.3015    | 0.8231    | 0.7449    | 122       |
+  | other          | 0.3015    | 0.8231    | 0.7449    | 142       |
+  +----------------+-----------+-----------+-----------+-----------+
 
-Log file: scorevision_db_lookup.log
+task_id 52021 [block=7588751]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588751-0f12c0d0f3f2d26623418f0361039e60550254c6baf24a3d8ab0efda3ae7e5e6.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588751-0f12c0d0f3f2d26623418f0361039e60550254c6baf24a3d8ab0efda3ae7e5e6.json
+  OTHER evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588760-0f12c0d0f3f2d26623418f0361039e60550254c6baf24a3d8ab0efda3ae7e5e6.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588760-0f12c0d0f3f2d26623418f0361039e60550254c6baf24a3d8ab0efda3ae7e5e6.json
+  video            URL: https://scoredata.me/chunks/b9a30430e601411097d0f9f7b89732.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0541    | 0.7414    | 0.6383    | 119       |
+  | other          | 0.0541    | 0.7414    | 0.6383    | 142       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51997 [block=7588705]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588705-4fd7fb5674fae688b1e154a8e33000f645c9303b75378b850968dfc852aac2b3.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588705-4fd7fb5674fae688b1e154a8e33000f645c9303b75378b850968dfc852aac2b3.json
+  OTHER evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588709-4fd7fb5674fae688b1e154a8e33000f645c9303b75378b850968dfc852aac2b3.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588709-4fd7fb5674fae688b1e154a8e33000f645c9303b75378b850968dfc852aac2b3.json
+  video            URL: https://scoredata.me/chunks/c755e4b69efc478e93fbcbbc091704.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.6752    | 0.8998    | 0.8661    | 139       |
+  | other          | 0.6752    | 0.8998    | 0.8661    | 198       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51584 [block=7588698]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588698-42819bc56eb714f7c7b38b478e4684bc6a378883672b927d5248118ff5cabc6a.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588698-42819bc56eb714f7c7b38b478e4684bc6a378883672b927d5248118ff5cabc6a.json
+  OTHER evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588701-42819bc56eb714f7c7b38b478e4684bc6a378883672b927d5248118ff5cabc6a.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588701-42819bc56eb714f7c7b38b478e4684bc6a378883672b927d5248118ff5cabc6a.json
+  video            URL: https://scoredata.me/chunks/99949423ae874035930e795927fc04.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.2479    | 0.7978    | 0.7153    | 128       |
+  | other          | 0.2479    | 0.7978    | 0.7153    | 152       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53046 [block=7588584]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588584-e2b70d278fe69e1b11782dc7478bb12b9e9861b53abab751dc7bfb336814255b.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588584-e2b70d278fe69e1b11782dc7478bb12b9e9861b53abab751dc7bfb336814255b.json
+  OTHER evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588588-e2b70d278fe69e1b11782dc7478bb12b9e9861b53abab751dc7bfb336814255b.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588588-e2b70d278fe69e1b11782dc7478bb12b9e9861b53abab751dc7bfb336814255b.json
+  video            URL: https://scoredata.me/chunks/d52ab26c8d75482f8fdeb394e4e084.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.4678    | 0.861     | 0.802     | 106       |
+  | other          | 0.4678    | 0.861     | 0.802     | 130       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51730 [block=7588350]  ->  ✅ You win
+  ME    evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588350-bc6d43e3ed48973d93a843d213522e411c20f74c539c85bc2bd9add62dee3693.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588350-bc6d43e3ed48973d93a843d213522e411c20f74c539c85bc2bd9add62dee3693.json
+  OTHER evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588359-bc6d43e3ed48973d93a843d213522e411c20f74c539c85bc2bd9add62dee3693.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588359-bc6d43e3ed48973d93a843d213522e411c20f74c539c85bc2bd9add62dee3693.json
+  video            URL: https://scoredata.me/chunks/be87c0f5b1ae4afbb3a7d46a4edbdd.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0292    | 0.8659    | 0.7404    | 140       |
+  | other          | 0.0       | 0.0       | 0.0       | 149       | <- [Error] ❌ There was a problem during prediction: Response payload is not completed: <ContentLengthError: 400, message='Not enough data to satisfy content length header.'>
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51773 [block=7588313]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588313-aa29b8107d4e48b2846c64bdb4694e625b487510de2dd09202933070f7684407.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588313-aa29b8107d4e48b2846c64bdb4694e625b487510de2dd09202933070f7684407.json
+  OTHER evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588316-aa29b8107d4e48b2846c64bdb4694e625b487510de2dd09202933070f7684407.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588316-aa29b8107d4e48b2846c64bdb4694e625b487510de2dd09202933070f7684407.json
+  video            URL: https://scoredata.me/chunks/a37a96ddf99d4a0e9d7a3c32eef120.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0447    | 0.7783    | 0.6683    | 106       |
+  | other          | 0.0447    | 0.7783    | 0.6683    | 140       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53149 [block=7588309]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007588309-9c477206a75b6637a68ff915a2d034b1182a95f9e9f14eb9bdb944226503f117.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007588309-9c477206a75b6637a68ff915a2d034b1182a95f9e9f14eb9bdb944226503f117.json
+  OTHER evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007588312-9c477206a75b6637a68ff915a2d034b1182a95f9e9f14eb9bdb944226503f117.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007588312-9c477206a75b6637a68ff915a2d034b1182a95f9e9f14eb9bdb944226503f117.json
+  video            URL: https://scoredata.me/chunks/d62858adcd274567b386d867d014c9.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.487     | 0.8267    | 0.7757    | 120       |
+  | other          | 0.487     | 0.8267    | 0.7757    | 147       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51885 [block=7587887]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587887-30693d7db7099ba123dbab473e77248551c952a2de540c6f561e3007e33ee4bc.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587887-30693d7db7099ba123dbab473e77248551c952a2de540c6f561e3007e33ee4bc.json
+  OTHER evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587890-30693d7db7099ba123dbab473e77248551c952a2de540c6f561e3007e33ee4bc.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587890-30693d7db7099ba123dbab473e77248551c952a2de540c6f561e3007e33ee4bc.json
+  video            URL: https://scoredata.me/chunks/cb12c10e12a64337a5b412895c939f.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.4889    | 0.7587    | 0.7183    | 122       |
+  | other          | 0.4889    | 0.7587    | 0.7183    | 147       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53063 [block=7587624]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587624-f2e172ec1e9bcd68b962ff4e7a7278b407ae95f119e69057e81722e3a90a4a6b.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587624-f2e172ec1e9bcd68b962ff4e7a7278b407ae95f119e69057e81722e3a90a4a6b.json
+  OTHER evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587633-f2e172ec1e9bcd68b962ff4e7a7278b407ae95f119e69057e81722e3a90a4a6b.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587633-f2e172ec1e9bcd68b962ff4e7a7278b407ae95f119e69057e81722e3a90a4a6b.json
+  video            URL: https://scoredata.me/chunks/3a890987113e4752a677dc03bb557e.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.3285    | 0.6425    | 0.5954    | 174       |
+  | other          | 0.3285    | 0.6425    | 0.5954    | 154       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51677 [block=7587615]  ->  🤝 Tie
+  ME    evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587615-d5be12863990753b4280b07e694051d6f10f78346233fb0a82a2066358f21005.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587615-d5be12863990753b4280b07e694051d6f10f78346233fb0a82a2066358f21005.json
+  OTHER evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587618-d5be12863990753b4280b07e694051d6f10f78346233fb0a82a2066358f21005.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587618-d5be12863990753b4280b07e694051d6f10f78346233fb0a82a2066358f21005.json
+  video            URL: https://scoredata.me/chunks/46c97fe679b9416199a26aab307bd6.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.1484    | 0.8541    | 0.7482    | 122       |
+  | other          | 0.1484    | 0.8541    | 0.7482    | 146       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51729 [block=7587543]  ->  ✅ You win
+  ME    evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587543-8e3e0d613d999533f9f8ae60de3dca93bc2b48d942778a01c153bb758d526001.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587543-8e3e0d613d999533f9f8ae60de3dca93bc2b48d942778a01c153bb758d526001.json
+  OTHER evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587546-8e3e0d613d999533f9f8ae60de3dca93bc2b48d942778a01c153bb758d526001.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587546-8e3e0d613d999533f9f8ae60de3dca93bc2b48d942778a01c153bb758d526001.json
+  video            URL: https://scoredata.me/chunks/bb6b211f813648419ccbea81ef4c4c.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.226     | 0.8492    | 0.7557    | 115       |
+  | other          | 0.2279    | 0.765     | 0.6844    | 122       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51790 [block=7587529]  ->  ❌ You lose
+  ME    evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587529-eecc07b8bdea6ae497700fde116307145e061476867f38cc38016d9e7e918467.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587529-eecc07b8bdea6ae497700fde116307145e061476867f38cc38016d9e7e918467.json
+  OTHER evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587533-eecc07b8bdea6ae497700fde116307145e061476867f38cc38016d9e7e918467.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587533-eecc07b8bdea6ae497700fde116307145e061476867f38cc38016d9e7e918467.json
+  video            URL: https://scoredata.me/chunks/00518037aa9a4631b94749aebe0a5b.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0053    | 0.7468    | 0.6356    | 131       |
+  | other          | 0.0011    | 0.7621    | 0.648     | 121       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53050 [block=7587270]  ->  ✅ You win
+  ME    evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587270-fa7a8fe7f3ce00be9a8ef575e4b781563ee8a2639e4ab9d4d2a7eed10663c315.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587270-fa7a8fe7f3ce00be9a8ef575e4b781563ee8a2639e4ab9d4d2a7eed10663c315.json
+  OTHER evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587273-fa7a8fe7f3ce00be9a8ef575e4b781563ee8a2639e4ab9d4d2a7eed10663c315.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587273-fa7a8fe7f3ce00be9a8ef575e4b781563ee8a2639e4ab9d4d2a7eed10663c315.json
+  video            URL: https://scoredata.me/chunks/9a0b45f4fa0c402eb0f9014bc5c8c1.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0075    | 0.923     | 0.7857    | 112       |
+  | other          | 0.006     | 0.8883    | 0.756     | 227       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53082 [block=7587244]  ->  ✅ You win
+  ME    evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587244-ab1b86a5179e2ca3523f96a1e1386bd735383e2de9a828b898657788fb714a53.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587244-ab1b86a5179e2ca3523f96a1e1386bd735383e2de9a828b898657788fb714a53.json
+  OTHER evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587253-ab1b86a5179e2ca3523f96a1e1386bd735383e2de9a828b898657788fb714a53.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587253-ab1b86a5179e2ca3523f96a1e1386bd735383e2de9a828b898657788fb714a53.json
+  video            URL: https://scoredata.me/chunks/ce265d23988547838b8fe541bf45bd.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.3367    | 0.8441    | 0.768     | 122       |
+  | other          | 0.1928    | 0.8357    | 0.7392    | 122       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51849 [block=7587160]  ->  ✅ You win
+  ME    evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007587160-80e9da0902ba954ab328f99799c639a19302a926da6c4a0fbb44459addbaf81c.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007587160-80e9da0902ba954ab328f99799c639a19302a926da6c4a0fbb44459addbaf81c.json
+  OTHER evaluation URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007587163-80e9da0902ba954ab328f99799c639a19302a926da6c4a0fbb44459addbaf81c.json
+        responses  URL: https://pub-b2fdfa5b7a5344f384b6f6015a19a24c.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007587163-80e9da0902ba954ab328f99799c639a19302a926da6c4a0fbb44459addbaf81c.json
+  video            URL: https://scoredata.me/chunks/470c6f4618d044b6a0b69f395975be.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.1596    | 0.8118    | 0.7139    | 115       |
+  | other          | 0.1849    | 0.6829    | 0.6082    | 121       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 53109 [block=7586962]  ->  ✅ You win
+  ME    evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007586962-8d699ab888aae8c36fe268e510cd83b392c10d412d14611d62e9c6cfbf50432a.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007586962-8d699ab888aae8c36fe268e510cd83b392c10d412d14611d62e9c6cfbf50432a.json
+  OTHER evaluation URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007586965-8d699ab888aae8c36fe268e510cd83b392c10d412d14611d62e9c6cfbf50432a.json
+        responses  URL: https://pub-76c893c4f28248be963f7571f3d8ffa9.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007586965-8d699ab888aae8c36fe268e510cd83b392c10d412d14611d62e9c6cfbf50432a.json
+  video            URL: https://scoredata.me/chunks/1004cfe5791a4812b68f3b9285fbf7.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.261     | 0.8536    | 0.7647    | 124       |
+  | other          | 0.1493    | 0.8135    | 0.7139    | 226       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51781 [block=7586913]  ->  ✅ You win
+  ME    evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007586913-5f75f763dbe834a89cf8c8d3055af5a483ca901aba90b701aedf4b6ebc454a5d.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007586913-5f75f763dbe834a89cf8c8d3055af5a483ca901aba90b701aedf4b6ebc454a5d.json
+  OTHER evaluation URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007586921-5f75f763dbe834a89cf8c8d3055af5a483ca901aba90b701aedf4b6ebc454a5d.json
+        responses  URL: https://pub-7b4130b6af75472f800371248bca15b6.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007586921-5f75f763dbe834a89cf8c8d3055af5a483ca901aba90b701aedf4b6ebc454a5d.json
+  video            URL: https://scoredata.me/chunks/b76fcb05cd024a73b00674e12d1a7a.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.0883    | 0.864     | 0.7477    | 126       |
+  | other          | 0.0538    | 0.8312    | 0.7146    | 122       |
+  +----------------+-----------+-----------+-----------+-----------+
+
+task_id 51664 [block=7586811]  ->  ✅ You win
+  ME    evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/evaluation/007586811-87a62a2c3aba803f81b5432def753d181ebc8619dafa95894f09aa7ff191d739.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5EtFwzQfEE3T9kbLpVCeecCPJQLQ8j19KQZjDLBgJATfTXLB/responses/007586811-87a62a2c3aba803f81b5432def753d181ebc8619dafa95894f09aa7ff191d739.json
+  OTHER evaluation URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/evaluation/007586814-87a62a2c3aba803f81b5432def753d181ebc8619dafa95894f09aa7ff191d739.json
+        responses  URL: https://pub-5c8278d7febb4036b4bc7062c4c828c0.r2.dev/scorevision/results_soccer/5CoJ1BGeMr5yhLuZRTbPtKyKN19GGkKbQeKSL57Ugw51EFD9/responses/007586814-87a62a2c3aba803f81b5432def753d181ebc8619dafa95894f09aa7ff191d739.json
+  video            URL: https://scoredata.me/chunks/a192a6f7b2b64e299f57803d9335dc.mp4
+  +----------------+-----------+-----------+-----------+-----------+
+  |                | keypoint  | bbox      | total     | duration  |
+  +----------------+-----------+-----------+-----------+-----------+
+  | you            | 0.1146    | 0.8842    | 0.7687    | 107       |
+  | other          | 0.1213    | 0.819     | 0.7144    | 120       |
+  +----------------+-----------+-----------+-----------+-----------+

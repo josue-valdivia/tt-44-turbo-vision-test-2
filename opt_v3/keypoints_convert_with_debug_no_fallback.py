@@ -153,7 +153,7 @@ else:
 # Persistent seed for find_nearest_white across frames
 DEBUG_FLAG = True
 TV_KP_PROFILE: bool = False
-ONLY_FRAMES = list(range(223, 224))
+ONLY_FRAMES = list(range(625, 626))
 STEP4_1_ENABLED = True         # border-line computation (red/green), kkp5/kkp29 and H for Step 4.9
 STEP4_3_ENABLED = True         # refine keypoints with AB/CD lines and H-projected (dilate + green lines)
 STEP5_ENABLED = True           # score the ordered keypoints
@@ -887,6 +887,8 @@ def _step4_1_compute_border_line(
     ordered_kps: list[list[float]],
     frame_number: int,
     cached_edges: np.ndarray | None = None,
+    prev_best_aay: int | None = None,
+    prev_best_bby: int | None = None,
 ) -> dict[str, Any]:
     """
     Step 4.1: Compute H from input keypoints; project kp[5] and kp[29]; draw infinite red line.
@@ -1058,6 +1060,9 @@ def _step4_1_compute_border_line(
 
         # Pre-flatten edges_dilated for Cython function (only once, reused for all calls)
         edges_dilated_flat = edges_dilated.ravel() if _sloping_line_white_count_cy is not None else None
+        # Per-x EF line y values (filled after ef_left/ef_right); used to avoid repeated line-equation work in scorer
+        _y_left_at_x: np.ndarray | None = None
+        _y_right_at_x: np.ndarray | None = None
 
         def _border_line_white_rate(y_left: float, y_right: float) -> float:
             ax, ay = 0.0, y_left
@@ -1086,21 +1091,28 @@ def _step4_1_compute_border_line(
             if qx_flat.size == 0:
                 return 0.0
             if ef_left is not None or ef_right is not None:
-                under_mask = np.zeros(qx_flat.shape, dtype=bool)
-                if ef_left is not None:
-                    (lax, lay), (lbx, lby) = ef_left
-                    if abs(float(lbx - lax)) > 1e-9:
-                        y_left_line = float(lay) + (qx_flat.astype(np.float64) - float(lax)) * (
-                            (float(lby - lay)) / float(lbx - lax)
-                        )
-                        under_mask |= qy_flat.astype(np.float64) >= y_left_line
-                if ef_right is not None:
-                    (rax, ray), (rbx, rby) = ef_right
-                    if abs(float(rbx - rax)) > 1e-9:
-                        y_right_line = float(ray) + (qx_flat.astype(np.float64) - float(rax)) * (
-                            (float(rby - ray)) / float(rbx - rax)
-                        )
-                        under_mask |= qy_flat.astype(np.float64) >= y_right_line
+                if _y_left_at_x is not None and _y_right_at_x is not None:
+                    qx_clip = np.clip(qx_flat, 0, W_img - 1)
+                    under_mask = (
+                        (qy_flat.astype(np.float64) >= _y_left_at_x[qx_clip])
+                        | (qy_flat.astype(np.float64) >= _y_right_at_x[qx_clip])
+                    )
+                else:
+                    under_mask = np.zeros(qx_flat.shape, dtype=bool)
+                    if ef_left is not None:
+                        (lax, lay), (lbx, lby) = ef_left
+                        if abs(float(lbx - lax)) > 1e-9:
+                            y_left_line = float(lay) + (qx_flat.astype(np.float64) - float(lax)) * (
+                                (float(lby - lay)) / float(lbx - lax)
+                            )
+                            under_mask |= qy_flat.astype(np.float64) >= y_left_line
+                    if ef_right is not None:
+                        (rax, ray), (rbx, rby) = ef_right
+                        if abs(float(rbx - rax)) > 1e-9:
+                            y_right_line = float(ray) + (qx_flat.astype(np.float64) - float(rax)) * (
+                                (float(rby - ray)) / float(rbx - rax)
+                            )
+                            under_mask |= qy_flat.astype(np.float64) >= y_right_line
                 qx_flat = qx_flat[under_mask]
                 qy_flat = qy_flat[under_mask]
                 if qx_flat.size == 0:
@@ -1202,6 +1214,21 @@ def _step4_1_compute_border_line(
 
         ef_left = _best_ef_line(0, 5)
         ef_right = _best_ef_line(24, 29)
+        # Precompute per-x EF line y values once (under_ef mask) for fast border-line scoring
+        _y_left_at_x = np.full(W_img, -np.inf, dtype=np.float64)
+        _y_right_at_x = np.full(W_img, -np.inf, dtype=np.float64)
+        if ef_left is not None:
+            (lax, lay), (lbx, lby) = ef_left
+            if abs(float(lbx - lax)) > 1e-9:
+                inv = (float(lby - lay)) / float(lbx - lax)
+                for x in range(W_img):
+                    _y_left_at_x[x] = float(lay) + (x - float(lax)) * inv
+        if ef_right is not None:
+            (rax, ray), (rbx, rby) = ef_right
+            if abs(float(rbx - rax)) > 1e-9:
+                inv = (float(rby - ray)) / float(rbx - rax)
+                for x in range(W_img):
+                    _y_right_at_x[x] = float(ray) + (x - float(rax)) * inv
 
         def _best_green_segment(idx_a: int, idx_b: int) -> tuple[tuple[int, int], tuple[int, int], float] | None:
             if idx_a >= len(all_proj_list) or idx_b >= len(all_proj_list):
@@ -1250,38 +1277,70 @@ def _step4_1_compute_border_line(
 
         seg_13_16 = _best_green_segment(13, 16)
 
-        # Search: E.y in [Ey-200, Ey+200], F.y in [Fy-200, Fy+200]. Coarse-to-fine + early exit to reduce time.
-        a_min = int(np.floor(Ey - 200.0))
-        a_max = int(np.ceil(Ey + 200.0))
-        b_min = int(np.floor(Fy - 200.0))
-        b_max = int(np.ceil(Fy + 200.0))
+        # Search: optional seed around prev (best_aay, best_bby) ±20; then adaptive ±80, expand to ±200 if score weak.
+        STEP_COARSE_41 = 20
+        REFINE_RADIUS_41 = 2  # was 4; smaller refine window for speed
+        STEP_FINE_41 = 2
+        SEED_WINDOW_41 = 20
+        SMALL_RANGE_41 = 80
+        WIDE_RANGE_41 = 200
+        ADAPTIVE_MIN_WHITE_41 = 80  # expand to wide if best white count below this
+
         best_rate = -1.0
         best_aay: int | None = None
         best_bby: int | None = None
-        STEP_COARSE_41 = 20
-        REFINE_RADIUS_41 = 4
-        STEP_FINE_41 = 2
-        # Phase 1: coarse grid (step 4)
-        for aay in range(a_min, a_max + 1, STEP_COARSE_41):
-            for bby in range(b_min, b_max + 1, STEP_COARSE_41):
-                rate = _border_line_white_rate(float(aay), float(bby))
-                if rate > best_rate:
-                    best_rate = rate
-                    best_aay = aay
-                    best_bby = bby
-        # Phase 2: refine around best coarse (step 2 in ±REFINE_RADIUS_41)
-        if best_aay is not None and best_bby is not None:
-            a_ref_min = max(a_min, best_aay - REFINE_RADIUS_41)
-            a_ref_max = min(a_max, best_aay + REFINE_RADIUS_41)
-            b_ref_min = max(b_min, best_bby - REFINE_RADIUS_41)
-            b_ref_max = min(b_max, best_bby + REFINE_RADIUS_41)
-            for aay in range(a_ref_min, a_ref_max + 1, STEP_FINE_41):
-                for bby in range(b_ref_min, b_ref_max + 1, STEP_FINE_41):
+
+        def _run_coarse_refine(a_lo: int, a_hi: int, b_lo: int, b_hi: int) -> None:
+            nonlocal best_rate, best_aay, best_bby
+            for aay in range(a_lo, a_hi + 1, STEP_COARSE_41):
+                for bby in range(b_lo, b_hi + 1, STEP_COARSE_41):
                     rate = _border_line_white_rate(float(aay), float(bby))
                     if rate > best_rate:
                         best_rate = rate
                         best_aay = aay
                         best_bby = bby
+            if best_aay is not None and best_bby is not None:
+                a_ref_min = max(a_lo, best_aay - REFINE_RADIUS_41)
+                a_ref_max = min(a_hi, best_aay + REFINE_RADIUS_41)
+                b_ref_min = max(b_lo, best_bby - REFINE_RADIUS_41)
+                b_ref_max = min(b_hi, best_bby + REFINE_RADIUS_41)
+                for aay in range(a_ref_min, a_ref_max + 1, STEP_FINE_41):
+                    for bby in range(b_ref_min, b_ref_max + 1, STEP_FINE_41):
+                        rate = _border_line_white_rate(float(aay), float(bby))
+                        if rate > best_rate:
+                            best_rate = rate
+                            best_aay = aay
+                            best_bby = bby
+
+        # 1) Optional: tight seed around previous frame (best_aay, best_bby) ±SEED_WINDOW_41
+        used_seed = False
+        if prev_best_aay is not None and prev_best_bby is not None:
+            a_seed_lo = max(0, prev_best_aay - SEED_WINDOW_41)
+            a_seed_hi = min(H_img - 1, prev_best_aay + SEED_WINDOW_41)
+            b_seed_lo = max(0, prev_best_bby - SEED_WINDOW_41)
+            b_seed_hi = min(H_img - 1, prev_best_bby + SEED_WINDOW_41)
+            _run_coarse_refine(a_seed_lo, a_seed_hi, b_seed_lo, b_seed_hi)
+            if best_rate >= ADAPTIVE_MIN_WHITE_41:
+                used_seed = True
+
+        if not used_seed:
+            # 2) Adaptive: try small range ±SMALL_RANGE_41 first
+            a_min_s = int(np.clip(Ey - SMALL_RANGE_41, 0, H_img - 1))
+            a_max_s = int(np.clip(Ey + SMALL_RANGE_41, 0, H_img - 1))
+            b_min_s = int(np.clip(Fy - SMALL_RANGE_41, 0, H_img - 1))
+            b_max_s = int(np.clip(Fy + SMALL_RANGE_41, 0, H_img - 1))
+            _run_coarse_refine(a_min_s, a_max_s, b_min_s, b_max_s)
+            # 3) If score weak, expand to ±WIDE_RANGE_41
+            if best_rate < ADAPTIVE_MIN_WHITE_41:
+                a_min = int(np.floor(Ey - WIDE_RANGE_41))
+                a_max = int(np.ceil(Ey + WIDE_RANGE_41))
+                b_min = int(np.floor(Fy - WIDE_RANGE_41))
+                b_max = int(np.ceil(Fy + WIDE_RANGE_41))
+                a_min = max(0, min(a_min, H_img - 1))
+                a_max = max(0, min(a_max, H_img - 1))
+                b_min = max(0, min(b_min, H_img - 1))
+                b_max = max(0, min(b_max, H_img - 1))
+                _run_coarse_refine(a_min, a_max, b_min, b_max)
 
         # Fallback: if search had no candidates (empty range), use red-line E/F (no cap to image)
         if best_aay is None or best_bby is None:
@@ -1462,8 +1521,8 @@ def _step4_9_select_h_and_keypoints(
 ) -> tuple[list[list[float]] | None, float]:
     """
     Step 4.9: H1 is taken from Step 4.1 when available (same input kps), else computed from input kps.
-    H2 (input + step4_3 kkps weight 4), H3 (input + step4_1 & step4_3 kkps weight 8 and 4),
-    H4 (input + step4_1 kkps weight 4, only when Step 4.1 is enabled).
+    H2 (input + step4_3 kkps weight 4), H3 (input + step4_1 & step4_3 kkps weight 4 and 2, kkp[16] weight 8),
+    H4 (input + step4_1 kkps weight 4, kkp[16] weight 8, only when Step 4.1 is enabled).
     Score each H with evaluate_keypoints_for_frame; pick best H. If all fail or max score 0.0, fallback (return None, 0.0).
     For best H, re-project template keypoints and return (keypoints, score). Keypoints: in-bounds only; others [0,0].
     """
@@ -1478,6 +1537,7 @@ def _step4_9_select_h_and_keypoints(
         weight_43: int,
         weight_41: int,
         use_right: bool,
+        weight_idx16: int = 1,
     ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
         src_list: list[tuple[float, float]] = []
         dst_list: list[tuple[float, float]] = []
@@ -1494,8 +1554,11 @@ def _step4_9_select_h_and_keypoints(
             w = 1
             if i in idx_43:
                 w = weight_43
-            elif i in idx_41:
+            elif i in idx_41 and i != 16:
+                # step 4.1 except kkp[16] (kkp[16] is step 4.1 but gets weight_idx16 below)
                 w = weight_41
+            if i == 16:
+                w = weight_idx16  # kkp[16] in step 4.1, weight 8 for H3/H4
             for _ in range(w):
                 src_list.append(src_pt)
                 dst_list.append(dst_pt)
@@ -1597,6 +1660,7 @@ def _step4_9_select_h_and_keypoints(
                 weight_43=h3_weight_43,
                 weight_41=h3_weight_41,
                 use_right=use_right,
+                weight_idx16=h3h4_weight_16,
             )
             if len(src3) >= 4:
                 H3_try, _ = cv2.findHomography(np.array(src3, dtype=np.float32), np.array(dst3, dtype=np.float32))
@@ -1608,6 +1672,7 @@ def _step4_9_select_h_and_keypoints(
                 weight_43=1,
                 weight_41=h4_weight_41,
                 use_right=use_right,
+                weight_idx16=h3h4_weight_16,
             )
             if len(src4) >= 4:
                 H4_try, _ = cv2.findHomography(np.array(src4, dtype=np.float32), np.array(dst4, dtype=np.float32))
@@ -1714,16 +1779,18 @@ def _step4_9_select_h_and_keypoints(
     # Make Step 4.9 weighting obey Step 4.1 / Step 4.3 flags.
     # When a step is disabled, its corresponding weight boost falls back to 1.
     h2_weight_43 = 4 if STEP4_3_ENABLED else 1
-    h3_weight_43 = 4 if STEP4_3_ENABLED else 1
-    h3_weight_41 = 8 if STEP4_1_ENABLED else 1
+    h3_weight_43 = 2 if STEP4_3_ENABLED else 1
+    h3_weight_41 = 4 if STEP4_1_ENABLED else 1
     h4_weight_41 = 4 if STEP4_1_ENABLED else 1
+    # kkp[16] weighted 8 for H3 and H4 only
+    h3h4_weight_16 = 8
 
     if DEBUG_FLAG:
         print(
             f"[DEBUG] Frame {frame_number} - Step 4.9: building H1 (input kps), "
             f"H2 (input + step4_3 kkps weight {h2_weight_43}), "
-            f"H3 (input + step4_1 & step4_3 kkps weight {h3_weight_41} & {h3_weight_43}), "
-            f"H4 (input + step4_1 kkps weight {h4_weight_41})"
+            f"H3 (input + step4_1 & step4_3 kkps weight {h3_weight_41} & {h3_weight_43}, kkp[16] weight {h3h4_weight_16}), "
+            f"H4 (input + step4_1 kkps weight {h4_weight_41}, kkp[16] weight {h3h4_weight_16})"
         )
 
     # kps1 = input (for H1)
@@ -1745,21 +1812,27 @@ def _step4_9_select_h_and_keypoints(
             if step4_3.get("kkp20") is not None:
                 kps2[20] = list(step4_3["kkp20"])
 
-    # kps3 = input overwritten by step4_1 and step4_3 kkps
+    # kps3 = input overwritten by step4_1 and step4_3 kkps (including weighted kkp[13,14,15,16])
     kps3 = [list(kp) if kp else [0.0, 0.0] for kp in kps2]
     if step4_1:
         if step4_1.get("kkp5") is not None:
             kps3[5] = list(step4_1["kkp5"])
         if step4_1.get("kkp29") is not None:
             kps3[29] = list(step4_1["kkp29"])
+        for idx in (13, 14, 15, 16):
+            if step4_1.get(f"kkp{idx}") is not None:
+                kps3[idx] = list(step4_1[f"kkp{idx}"])
 
-    # kps4 = input overwritten by step4_1 kkps only
+    # kps4 = input overwritten by step4_1 kkps only (including weighted kkp[13,14,15,16])
     kps4 = [list(kp) if kp else [0.0, 0.0] for kp in kps1]
     if step4_1:
         if step4_1.get("kkp5") is not None:
             kps4[5] = list(step4_1["kkp5"])
         if step4_1.get("kkp29") is not None:
             kps4[29] = list(step4_1["kkp29"])
+        for idx in (13, 14, 15, 16):
+            if step4_1.get(f"kkp{idx}") is not None:
+                kps4[idx] = list(step4_1[f"kkp{idx}"])
 
     # H1: reuse H from Step 4.1 when available (same input kps), else compute from kps1
     H1 = None
@@ -1790,6 +1863,7 @@ def _step4_9_select_h_and_keypoints(
             weight_43=h3_weight_43,
             weight_41=h3_weight_41,
             use_right=use_right,
+            weight_idx16=h3h4_weight_16,
         )
         if len(src3) >= 4:
             H3, _ = cv2.findHomography(np.array(src3, dtype=np.float32), np.array(dst3, dtype=np.float32))
@@ -1802,6 +1876,7 @@ def _step4_9_select_h_and_keypoints(
             weight_43=1,
             weight_41=h4_weight_41,
             use_right=use_right,
+            weight_idx16=h3h4_weight_16,
         )
         if len(src4) >= 4:
             H4, _ = cv2.findHomography(np.array(src4, dtype=np.float32), np.array(dst4, dtype=np.float32))
@@ -7665,6 +7740,7 @@ def main() -> None:
         if KEYPOINT_H_CONVERT_FLAG and STEP8_EDGE_CACHE_MAX > 0
         else None
     )
+    prev_step4_1_seed: dict[str, int] | None = None  # (best_aay, best_bby) from previous frame for step 4.1 speed
     try:
         prof = _KPProfiler(enabled=_kp_prof_enabled())
         total_frames = len(frame_ids)
@@ -7911,9 +7987,14 @@ def main() -> None:
                         ordered_kps=ordered_kps,
                         frame_number=int(fn),
                         cached_edges=cached_edges,
+                        prev_best_aay=prev_step4_1_seed.get("best_aay") if prev_step4_1_seed else None,
+                        prev_best_bby=prev_step4_1_seed.get("best_bby") if prev_step4_1_seed else None,
                     )
                     parts_ms["step4_1"] = (time.perf_counter() - t_step41) * 1000.0
                     _merge_step4_1_profile_into_parts(best_meta.get("step4_1"), parts_ms)
+                    s41 = best_meta.get("step4_1") or {}
+                    if s41.get("best_aay") is not None and s41.get("best_bby") is not None:
+                        prev_step4_1_seed = {"best_aay": int(s41["best_aay"]), "best_bby": int(s41["best_bby"])}
                 else:
                     best_meta["step4_1"] = {}
                 best_meta["step4_2"] = {}  # Step 4.2 removed; kkp5/kkp29 from Step 4.1 for Step 4.9
@@ -8394,6 +8475,7 @@ def convert_payload(
         if KEYPOINT_H_CONVERT_FLAG and STEP8_EDGE_CACHE_MAX > 0
         else None
     )
+    prev_step4_1_seed: dict[str, int] | None = None  # (best_aay, best_bby) from previous frame for step 4.1 speed
     try:
         total_frames = len(frame_ids)
         for idx, fn in enumerate(frame_ids):
@@ -8632,9 +8714,14 @@ def convert_payload(
                     ordered_kps=ordered_kps,
                     frame_number=int(fn),
                     cached_edges=cached_edges,
+                    prev_best_aay=prev_step4_1_seed.get("best_aay") if prev_step4_1_seed else None,
+                    prev_best_bby=prev_step4_1_seed.get("best_bby") if prev_step4_1_seed else None,
                 )
                 parts_ms["step4_1"] = (time.perf_counter() - t_step41) * 1000.0
                 _merge_step4_1_profile_into_parts(best_meta.get("step4_1"), parts_ms)
+                s41 = best_meta.get("step4_1") or {}
+                if s41.get("best_aay") is not None and s41.get("best_bby") is not None:
+                    prev_step4_1_seed = {"best_aay": int(s41["best_aay"]), "best_bby": int(s41["best_bby"])}
                 best_meta["step4_2"] = {}  # Step 4.2 removed; kkp5/kkp29 from Step 4.1 for Step 4.9
                 best_meta["reordered_keypoints"] = ordered_kps
 
