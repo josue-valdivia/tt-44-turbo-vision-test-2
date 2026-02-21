@@ -436,14 +436,29 @@ def _write_scoring_debug_images(
     (frame_dir / "score_meta.json").write_text(json.dumps(meta, indent=2))
 
 
-def _get_video_frame_cv2(video_url: str, frame_id: int) -> np.ndarray | None:
-    cap = cv2.VideoCapture(video_url)
-    try:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
-        ok, frame = cap.read()
-        return frame if ok and frame is not None else None
-    finally:
-        cap.release()
+class _FrameStore:
+    """Keeps a single VideoCapture open; avoids re-opening + re-seeking for every frame."""
+
+    def __init__(self, source: str) -> None:
+        self._cap = cv2.VideoCapture(source)
+        self._last_id: int | None = None
+
+    def get(self, frame_id: int) -> np.ndarray | None:
+        # Sequential read: just advance without seeking
+        if self._last_id is not None and frame_id == self._last_id + 1:
+            ok, frame = self._cap.read()
+        elif self._last_id is None and frame_id == 0:
+            ok, frame = self._cap.read()
+        else:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+            ok, frame = self._cap.read()
+        if not ok or frame is None:
+            return None
+        self._last_id = frame_id
+        return frame
+
+    def close(self) -> None:
+        self._cap.release()
 
 
 
@@ -453,7 +468,7 @@ def _score_frames_from_input_keypoints(
     default_height: int | None,
     *,
     debug_dir: Path | None = None,
-    video_url: str | None = None,
+    frame_store: "_FrameStore | None" = None,
 ) -> tuple[list[dict[str, float | int]], float]:
     """
     Score input keypoints using the exact same pipeline as keypoints_calculate_score.py:
@@ -507,7 +522,7 @@ def _score_frames_from_input_keypoints(
             continue
 
         # Read actual video frame (needed for edge detection and dimensions)
-        video_frame = _get_video_frame_cv2(video_url or "", frame_id)
+        video_frame = frame_store.get(frame_id) if frame_store else None
         if video_frame is None:
             per_frame.append({"frame": frame_id, "score": 0.0})
             scores.append(0.0)
@@ -683,9 +698,13 @@ def main() -> None:
     if DEBUG_FLAG:
         scoring_debug_dir = Path("debug_frames") / "scoring_step_by_step" / args.unsorted_json.stem
         scoring_debug_dir.mkdir(parents=True, exist_ok=True)
-    per_frame_scores, avg_score = _score_frames_from_input_keypoints(
-        ordered_frames, width, height, debug_dir=scoring_debug_dir, video_url=args.video_url
-    )
+    frame_store = _FrameStore(args.video_url)
+    try:
+        per_frame_scores, avg_score = _score_frames_from_input_keypoints(
+            ordered_frames, width, height, debug_dir=scoring_debug_dir, frame_store=frame_store
+        )
+    finally:
+        frame_store.close()
     print(f"\nAverage input keypoint score: {avg_score:.4f}")
 
     if STEP8_ENABLED:
