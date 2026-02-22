@@ -18,6 +18,9 @@ STEP7_SCORE_THRESHOLDS: list[float] = [0.3, 0.5]
 STEP7_MAX_GAP: int = 20
 STEP8_ENABLED = True
 
+SEGMENT_KP_PIXEL_THRESHOLD: float = 50.0
+SEGMENT_MIN_COMMON_KPS: int = 2
+
 STEP5_H1_WEIGHT_2_INDICES: list[int] = [4, 9, 10, 11, 12, 17, 18, 19, 20, 28]
 STEP5_H2_WEIGHT_3_INDICES: list[int] = [13, 14, 15]
 STEP5_H2_WEIGHT_4_INDICES: list[int] = [5, 16, 29]
@@ -1035,10 +1038,6 @@ def _run_step7_interpolation(
                 pass_count += 1
         total_updated += pass_count
     return total_updated
-
-
-SEGMENT_KP_PIXEL_THRESHOLD: float = 50.0
-SEGMENT_MIN_COMMON_KPS: int = 2
 
 
 def _valid_kps(frame_entry: dict[str, Any]) -> dict[int, tuple[float, float]]:
