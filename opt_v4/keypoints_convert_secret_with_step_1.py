@@ -25,9 +25,9 @@ STEP7_MAX_GAP: int = 20
 # If False, skip Step 8 keypoint adjustment.
 STEP8_ENABLED = True
 # Optional: process only specific frames. Keep empty to process all.
-# ONLY_FRAMES: list[int] = list(range(8, 11))
+# ONLY_FRAMES: list[int] = list(range(43, 44))
 # If True, write step-by-step scoring debug images.
-DEBUG_FLAG = True
+DEBUG_FLAG = False
 
 # Step 5: weighted homography schemes (indices into keypoints / FOOTBALL_KEYPOINTS_CORRECTED)
 STEP5_H1_WEIGHT_2_INDICES: list[int] = [4, 9, 10, 11, 12, 17, 18, 19, 20, 28]
@@ -289,6 +289,143 @@ def _infer_dims_from_kps(kps: list[Any]) -> tuple[int | None, int | None]:
     if not has_any:
         return None, None
     return int(max_x + 2.0), int(max_y + 2.0)
+
+
+def _is_valid_kp(kp: Any) -> bool:
+    if not isinstance(kp, (list, tuple)) or len(kp) < 2:
+        return False
+    x, y = float(kp[0]), float(kp[1])
+    return not (x == 0.0 and y == 0.0)
+
+
+def _clip_segment_to_frame(
+    ax: float, ay: float, bx: float, by: float, w: int, h: int
+) -> tuple[float, float] | None:
+    """Return the point where segment A->B crosses the frame [0,w]x[0,h], or None if B is inside."""
+    if 0 <= bx < w and 0 <= by < h:
+        return None
+    dx = bx - ax
+    dy = by - ay
+    best_t: float | None = None
+    if abs(dx) > 1e-12:
+        t = -ax / dx
+        py = ay + t * dy
+        if 0.0 < t <= 1.0 and 0 <= py <= h:
+            if best_t is None or t < best_t:
+                best_t = t
+        t = (w - ax) / dx
+        py = ay + t * dy
+        if 0.0 < t <= 1.0 and 0 <= py <= h:
+            if best_t is None or t < best_t:
+                best_t = t
+    if abs(dy) > 1e-12:
+        t = -ay / dy
+        px = ax + t * dx
+        if 0.0 < t <= 1.0 and 0 <= px <= w:
+            if best_t is None or t < best_t:
+                best_t = t
+        t = (h - ay) / dy
+        px = ax + t * dx
+        if 0.0 < t <= 1.0 and 0 <= px <= w:
+            if best_t is None or t < best_t:
+                best_t = t
+    if best_t is None:
+        return None
+    return (float(ax + best_t * dx), float(ay + best_t * dy))
+
+
+def _run_step1_infer_center_circle(
+    frames: list[dict[str, Any]],
+    default_width: int | None,
+    default_height: int | None,
+) -> int:
+    """
+    Step 1: Infer missing center-circle keypoint (kp[30] or kp[31]) from the other center
+    point and the center of kp[14], kp[15], when only 14,15 and one of 30/31 are valid.
+    """
+    updated = 0
+    indices_0_12 = list(range(0, 13))
+    indices_17_29 = list(range(17, 30))
+    for fe in frames:
+        if not isinstance(fe, dict):
+            continue
+        kps = fe.get("keypoints")
+        if not isinstance(kps, list) or len(kps) < 32:
+            continue
+        frame_width = fe.get("frame_width")
+        frame_height = fe.get("frame_height")
+        if frame_width is not None and frame_height is not None:
+            w, h = int(frame_width), int(frame_height)
+        else:
+            w, h = default_width, default_height
+        if w is None or h is None or w <= 0 or h <= 0:
+            w, h = _infer_dims_from_kps(kps)
+        if w is None or h is None:
+            continue
+        valid_14 = _is_valid_kp(kps[14])
+        valid_15 = _is_valid_kp(kps[15])
+        valid_30 = _is_valid_kp(kps[30])
+        valid_31 = _is_valid_kp(kps[31])
+        others_invalid = all(
+            not _is_valid_kp(kps[i]) for i in indices_0_12 + indices_17_29
+        )
+        frame_id = fe.get("frame_id", fe.get("frame_number", -1))
+
+        if valid_14 and valid_15 and valid_30 and not valid_31 and others_invalid:
+            ax = (float(kps[14][0]) + float(kps[15][0])) / 2.0
+            ay = (float(kps[14][1]) + float(kps[15][1])) / 2.0
+            x30 = float(kps[30][0])
+            y30 = float(kps[30][1])
+            bx = 2.0 * ax - x30
+            by = 2.0 * ay - y30
+            if 0 <= bx < w and 0 <= by < h:
+                kps[31] = [bx, by]
+                updated += 1
+                if DEBUG_FLAG:
+                    print(f"Step 1 frame {frame_id}: inferred kp[31]={[bx, by]} (B inside frame)")
+            else:
+                clipped = _clip_segment_to_frame(ax, ay, bx, by, w, h)
+                if clipped is not None:
+                    bx, by = clipped
+                    kps[31] = [bx, by]
+                    cx = 2.0 * ax - bx
+                    cy = 2.0 * ay - by
+                    kps[30] = [cx, cy]
+                    updated += 1
+                    if DEBUG_FLAG:
+                        print(f"Step 1 frame {frame_id}: B outside frame -> kp[31]={[bx, by]}, kp[30]={[cx, cy]}")
+                else:
+                    if DEBUG_FLAG:
+                        print(f"Step 1 frame {frame_id}: B outside frame but no clip point found, skipped")
+            continue
+
+        if valid_14 and valid_15 and valid_31 and not valid_30 and others_invalid:
+            ax = (float(kps[14][0]) + float(kps[15][0])) / 2.0
+            ay = (float(kps[14][1]) + float(kps[15][1])) / 2.0
+            x31 = float(kps[31][0])
+            y31 = float(kps[31][1])
+            bx = 2.0 * ax - x31
+            by = 2.0 * ay - y31
+            if 0 <= bx < w and 0 <= by < h:
+                kps[30] = [bx, by]
+                updated += 1
+                if DEBUG_FLAG:
+                    print(f"Step 1 frame {frame_id}: inferred kp[30]={[bx, by]} (B inside frame)")
+            else:
+                clipped = _clip_segment_to_frame(ax, ay, bx, by, w, h)
+                if clipped is not None:
+                    bx, by = clipped
+                    kps[30] = [bx, by]
+                    cx = 2.0 * ax - bx
+                    cy = 2.0 * ay - by
+                    kps[31] = [cx, cy]
+                    updated += 1
+                    if DEBUG_FLAG:
+                        print(f"Step 1 frame {frame_id}: B outside frame -> kp[30]={[bx, by]}, kp[31]={[cx, cy]}")
+                else:
+                    if DEBUG_FLAG:
+                        print(f"Step 1 frame {frame_id}: B outside frame but no clip point found, skipped")
+    return updated
 
 
 class _InvalidMask(Exception):
@@ -1432,6 +1569,15 @@ def main() -> None:
     raw_data = json.loads(args.unsorted_json.read_text())
     ordered_raw, ordered_frames = _extract_frames_container(raw_data)
 
+    width, height = _get_video_dims(args.video_url)
+
+    # ── Step 1: infer center-circle keypoint (kp[30] or kp[31]) when only 14,15 and one of 30/31 valid ──
+    step1_updated = _run_step1_infer_center_circle(ordered_frames, width, height)
+    if DEBUG_FLAG and step1_updated > 0:
+        print(f"Step 1: inferred center-circle keypoint for {step1_updated} frame(s)")
+    elif DEBUG_FLAG:
+        print("Step 1: no frames matched center-circle inference condition")
+
     # ── Step 2: segment detection ──────────────────────────────────────────
     segments, empty_ids = _detect_segments(ordered_frames)
     total_frames_with_kps = sum(len(s) for s in segments)
@@ -1457,7 +1603,6 @@ def main() -> None:
         print(f"  empty frames: {', '.join(ranges)}")
     print()
 
-    width, height = _get_video_dims(args.video_url)
     scoring_debug_dir: Path | None = None
     if DEBUG_FLAG:
         scoring_debug_dir = Path("debug_frames") / "scoring_step_by_step" / args.unsorted_json.stem
